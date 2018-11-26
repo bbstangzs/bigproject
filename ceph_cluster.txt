@@ -1,0 +1,57 @@
+部署ceph集群
+实验环境
+client 192.168.4.10
+node11 192.168.4.11
+node12 192.168.4.12
+node13 192.168.4.13
+每个节点分别配置4块20G的磁盘,其中/dev/vdb用作另外3块磁盘的日志盘
+注意:注意日志盘的权限问题(最好写入/etc/rc.local下,避免重启后失效)
+[root@node11 ~]# chown ceph.ceph /dev/vdb1
+[root@node11 ~]# chown ceph.ceph /dev/vdb2
+[root@node11 ~]# chown ceph.ceph /dev/vdb3
+
+1. 准备yum源
+2. 配置NTP时间同步
+3. 关闭防火墙,禁用selinux
+4. 配置/etc/hosts(3个节点都需要)
+[root@node11 ~]# cat /etc/hosts
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
+192.168.4.10 client10
+192.168.4.11 node11
+192.168.4.12 node12
+192.168.4.13 node13
+[root@node11 ~]# for i in {10..13};do scp /etc/hosts 192.168.4.$i;done
+
+5. node11配置ssh密钥认证,免密登陆所有节点(包括自己)
+[root@node11 ~]# ssh-keygen -t rsa -b 2048 -N '' -f /root/.ssh/id_rsa
+[root@node11 ~]# for i in {10..13}; do ssh-copy-id 192.168.4.$i; done
+
+开始部署ceph集群
+[root@node11 ~]# yum -y install ceph-deploy
+[root@node11 ~]# mkdir ceph;cd ceph   //创建并进入工作目录
+[root@node11 ~]# ceph-deploy new node11 node12 node13     //指定集群内的所有节点
+[root@node11 ~]# ceph-deploy install node11 node12 node13   //为所有节点安装ceph相关软件包
+[root@node11 ~]# ceph-deploy mon create-initial   //初始化所有节点mon服务
+
+初始化清空磁盘数据
+[root@node11 ~]# ceph-deploy disk zap node11:vdc node11:vdd node11:vde
+[root@node11 ~]# ceph-deploy disk zap node12:vdc node12:vdd node12:vde
+[root@node11 ~]# ceph-deploy disk zap node13:vdc node13:vdd node13:vde
+
+创建OSD存储空间
+[root@node11 ~]# ceph-deploy osd create node11:vdc:/dev/vdb1 node11:vdd:/dev/vdb2 node11:vde:/dev/vdb3
+[root@node11 ~]# ceph-deploy osd create node12:vdc:/dev/vdb1 node12:vdd:/dev/vdb2 node12:vde:/dev/vdb3
+[root@node11 ~]# ceph-deploy osd create node13:vdc:/dev/vdb1 node13:vdd:/dev/vdb2 node13:vde:/dev/vdb3
+
+
+[root@node11 ~]# ceph -s      
+//检查健康状态(常见错误内容包含时间不同步,域名解析错误等,常见问题查看ceph_err.txt)
+
+[root@node11 ~]# 
+[root@node11 ~]# 
+[root@node11 ~]# 
+[root@node11 ~]# 
+[root@node11 ~]# 
+
+
