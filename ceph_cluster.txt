@@ -48,10 +48,5 @@ node13 192.168.4.13
 [root@node11 ~]# ceph -s      
 //检查健康状态(常见错误内容包含时间不同步,域名解析错误等,常见问题查看ceph_err.txt)
 
-[root@node11 ~]# 
-[root@node11 ~]# 
-[root@node11 ~]# 
-[root@node11 ~]# 
-[root@node11 ~]# 
 
 
