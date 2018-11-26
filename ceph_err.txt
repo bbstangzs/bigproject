@@ -1,0 +1,168 @@
+ceph集群异常状态收集
+试验环境
+node11 192.168.4.11  
+node12 192.168.4.12
+node13 192.168.4.13
+每台主机分别由4块20G的磁盘,其中/dev/vdb进行分区用作另外3块磁盘的日志盘,
+[root@node11 ceph]# ceph-deploy osd create node11:vdc:/dev/vdb1 node11:vdd:/dev/vdb2 node11:vde:/dev/vdb3
+[root@node11 ceph]# ceph-deploy osd create node12:vdc:/dev/vdb1 node12:vdd:/dev/vdb2 node12:vde:/dev/vdb3
+[root@node11 ceph]# ceph-deploy osd create node13:vdc:/dev/vdb1 node13:vdd:/dev/vdb2 node13:vde:/dev/vdb3
+
+
+检查健康情况报错
+[root@node11 ceph]# ceph -s
+    cluster 4c3b759e-2d82-47c6-a4b5-7dfc8fdb49bd
+     health HEALTH_ERR
+            64 pgs are stuck inactive for more than 300 seconds
+            64 pgs stuck inactive
+     monmap e1: 3 mons at {node11=192.168.4.11:6789/0,node12=192.168.4.12:6789/0,node13=192.168.4.13:6789/0}
+            election epoch 8, quorum 0,1,2 node11,node12,node13
+     osdmap e10: 9 osds: 0 up, 0 in
+            flags sortbitwise
+      pgmap v11: 64 pgs, 1 pools, 0 bytes data, 0 objects
+            0 kB used, 0 kB / 0 kB avail
+                  64 creating
+
+//OSD一个都没有启动,经过检查,发现是存储服务器的日志journal盘未给权限(以node11为例,3个节点都需要做此操作)
+[root@node11 ceph]# chown ceph.ceph /dev/vdb1
+[root@node11 ceph]# chown ceph.ceph /dev/vdb2
+[root@node11 ceph]# chown ceph.ceph /dev/vdb3
+//注意.为防止服务器重启后权限失效,应注意将权限配置写入/etc/rc.local并给rc.local执行权限
+
+//重启后发现仍有6个OSD是down的,
+//并且发现两个新的报错
+//1. gp数过低
+//2. node11的mon监控服务没了
+[root@node11 ~]# systemctl restart ceph*.service ceph*.target
+[root@node11 ~]# ceph -s
+2018-11-26 10:23:20.970805 7f962877c700  0 -- :/666738602 >> 192.168.4.11:6789/0 pipe(0x7f962405c070 sd=3 :0 s=1 pgs=0 cs=0 l=1 c=0x7f962405e250).fault
+    cluster 4c3b759e-2d82-47c6-a4b5-7dfc8fdb49bd
+     health HEALTH_ERR
+            64 pgs are stuck inactive for more than 300 seconds
+            64 pgs degraded
+            64 pgs stuck inactive
+            64 pgs undersized
+            too few PGs per OSD (21 < min 30)                       //PG数太少
+            1 mons down, quorum 1,2 node12,node13
+     monmap e1: 3 mons at {node11=192.168.4.11:6789/0,node12=192.168.4.12:6789/0,node13=192.168.4.13:6789/0}
+            election epoch 12, quorum 1,2 node12,node13             //mon服务只剩下node12和node13
+     osdmap e18: 9 osds: 3 up, 3 in
+            flags sortbitwise
+      pgmap v28: 64 pgs, 1 pools, 0 bytes data, 0 objects
+            102256 kB used, 61307 MB / 61406 MB avail
+                  64 undersized+degraded+peered
+
+//先解决PG数量问题
+//提示要求每个OSD应不少于30个pg数,计算方法是:pg数量/osd数量*节点数量>30,因此修改pg数量为128个
+[root@node11 ~]# ceph osd pool set rbd pg_num 128
+[root@node11 ~]# ceph osd pool set rbd pgp_num 128
+//以上修改是因为以前遇到过此类错误,清楚pgp数量应该大于等于pg数量,所以直接将pgp也修改为128个
+另外需要注意的是,在生产环境中,如果修改pg数量,会对生产环境产生较大的影响
+因为pg数变了，就会导致整个集群的数据重新均衡和迁移，数据越大响应io的时间会越长。所以，最好在一开始就设置好pg数。
+关于pg数量的错误问题查询结果来源于:https://www.cnblogs.com/sisimi/
+
+//PG数量问题已解决,仍存在6个OSD是down的问题以及mode11的mon服务没启动
+[root@node11 ~]# ceph -s
+    cluster 4c3b759e-2d82-47c6-a4b5-7dfc8fdb49bd
+     health HEALTH_ERR
+            128 pgs are stuck inactive for more than 300 seconds
+            128 pgs degraded
+            128 pgs stuck inactive
+            128 pgs undersized
+            1 mons down, quorum 1,2 node12,node13
+     monmap e1: 3 mons at {node11=192.168.4.11:6789/0,node12=192.168.4.12:6789/0,node13=192.168.4.13:6789/0}
+            election epoch 12, quorum 1,2 node12,node13
+     osdmap e23: 9 osds: 3 up, 3 in
+            flags sortbitwise
+      pgmap v51: 128 pgs, 1 pools, 0 bytes data, 0 objects
+            101 MB used, 61305 MB / 61406 MB avail
+                 128 undersized+degraded+peered
+
+//检查node11的6789端口
+[root@node11 ceph]# ss -nutlp |grep  :6789  //确认服务确实没启动
+[root@node11 ceph]# ceph-deploy mon create-initial  //重新初始化mon
+[root@node11 ceph]# !ss
+ss -nutlp |grep  :6789
+tcp    LISTEN     0      128    192.168.4.11:6789                  *:*                   users:(("ceph-mon",pid=10614,fd=10))
+//再次检查端口,服务已启
+
+//最后回到了一开始的问题,OSD状态不正常
+//查看OSD树发现是node12与node13的OSD状态不正常
+[root@node11 ceph]# ceph osd tree
+ID WEIGHT  TYPE NAME       UP/DOWN REWEIGHT PRIMARY-AFFINITY 
+-1 0.05846 root default                                      
+-2 0.05846     host node11                                   
+ 0 0.01949         osd.0        up  1.00000          1.00000 
+ 2 0.01949         osd.2        up  1.00000          1.00000 
+ 1 0.01949         osd.1        up  1.00000          1.00000 
+ 3       0 osd.3              down        0          1.00000 
+ 4       0 osd.4              down        0          1.00000 
+ 5       0 osd.5              down        0          1.00000 
+ 6       0 osd.6              down        0          1.00000 
+ 7       0 osd.7              down        0          1.00000 
+ 8       0 osd.8              down        0          1.00000 
+
+//重新激活node12的OSD,再次查看OSD树,状态up
+[root@node11 ceph]# ceph-deploy osd activate node12:/dev/vdc1 node12:/dev/vdd1 node12:/dev/vde1
+[root@node11 ceph]# ceph osd tree
+ID WEIGHT  TYPE NAME       UP/DOWN REWEIGHT PRIMARY-AFFINITY 
+-1 0.11691 root default                                      
+-2 0.05846     host node11                                   
+ 0 0.01949         osd.0        up  1.00000          1.00000 
+ 2 0.01949         osd.2        up  1.00000          1.00000 
+ 1 0.01949         osd.1        up  1.00000          1.00000 
+-3 0.05846     host node12                                   
+ 3 0.01949         osd.3        up  1.00000          1.00000 
+ 4 0.01949         osd.4        up  1.00000          1.00000 
+ 5 0.01949         osd.5        up  1.00000          1.00000 
+ 6       0 osd.6              down        0          1.00000 
+ 7       0 osd.7              down        0          1.00000 
+ 8       0 osd.8              down        0          1.00000 
+
+//node13执行同样操作,所有的OSD都是UP
+[root@node11 ceph]# ceph-deploy osd activate node13:/dev/vdc1 node13:/dev/vdd1 node13:/dev/vde1
+[root@node11 ceph]# ceph osd tree
+ID WEIGHT  TYPE NAME       UP/DOWN REWEIGHT PRIMARY-AFFINITY 
+-1 0.17537 root default                                      
+-2 0.05846     host node11                                   
+ 0 0.01949         osd.0        up  1.00000          1.00000 
+ 2 0.01949         osd.2        up  1.00000          1.00000 
+ 1 0.01949         osd.1        up  1.00000          1.00000 
+-3 0.05846     host node12                                   
+ 3 0.01949         osd.3        up  1.00000          1.00000 
+ 4 0.01949         osd.4        up  1.00000          1.00000 
+ 5 0.01949         osd.5        up  1.00000          1.00000 
+-4 0.05846     host node13                                   
+ 6 0.01949         osd.6        up  1.00000          1.00000 
+ 7 0.01949         osd.7        up  1.00000          1.00000 
+ 8 0.01949         osd.8        up  1.00000          1.00000 
+
+//集群状态为健康
+[root@node11 ceph]# ceph -s
+    cluster 4c3b759e-2d82-47c6-a4b5-7dfc8fdb49bd
+     health HEALTH_OK
+     monmap e1: 3 mons at {node11=192.168.4.11:6789/0,node12=192.168.4.12:6789/0,node13=192.168.4.13:6789/0}
+            election epoch 16, quorum 0,1,2 node11,node12,node13
+     osdmap e61: 9 osds: 9 up, 9 in
+            flags sortbitwise
+      pgmap v134: 128 pgs, 1 pools, 0 bytes data, 0 objects
+            314 MB used, 179 GB / 179 GB avail
+                 128 active+clean
+
+以下内容参考来源于: https://www.cnblogs.com/boshen-hzb/
+//当某个OSD无法重新激活,可以尝试将该OSD从集群中删除
+#ceph osd out osd.1     //移出集群
+#ceph osd rm osd.1      //从集群中删除
+#ceph osd crush rm osd.1    //从crush中删除
+#ceph auth del osd.1      //删除认证信息
+
+#df -h      //查看磁盘与OSD对应关系,以便卸载正确的磁盘
+#umount /dev/vdc1     //此步骤非必须,生产环境中磁盘物理损坏需更换时才需要卸载,实验环境不需要此操作
+
+//重新初始化磁盘(记得需要在ceph工作目录下执行)
+#ceph-deploy --overwrite-conf osd  prepare node12:/dev/vdc1
+#ceph-deploy osd activate node12:/dev/vdc1 node12:/dev/vdd1 node12:/dev/vde1    
+//再次激活,注意此处的激活必须激活所有的OSD,而不是down的单个OSD
+
+
+
