@@ -1,0 +1,52 @@
+创建Ceph块存储
+
+[root@node11 ~]# ceph osd lspools   //查看默认存储池rbd
+0 rbd,
+
+//创建镜像test-image并查看
+[root@node11 ~]# rbd create test-image --image-feature layering --size 10G
+[root@node11 ~]# rbd list
+test-image
+[root@node11 ~]# rbd info test-image
+rbd image 'test-image':
+	size 10240 MB in 2560 objects
+	order 22 (4096 kB objects)
+	block_name_prefix: rbd_data.10d3238e1f29
+	format: 2
+	features: layering
+	flags: 
+
+//将镜像映射为本地磁盘(集群内访问)
+[root@node11 ~]# rbd map test-image
+/dev/rbd0
+[root@node11 ~]# lsblk | grep rbd0
+rbd0          251:16   0   10G  0 disk 
+[root@node11 ~]# mkfs.xfs /dev/rbd0  && mount /dev/rbd0 /mnt    //直接格式化挂载使用
+
+//使用一段时间后,磁盘空间不足,动态调整大小,扩容镜像
+[root@node11 ~]# rbd resize --size 30G game-image
+Resizing image: 100% complete...done.
+[root@node11 ~]# xfs_growfs /mnt
+
+//客户端通过KRBD访问
+[root@client10 ~]# yum -y install ceph-common   //客户端需要安装ceph-common软件包
+
+//拷贝配置文件及连接密钥(用于识别集群以及获得连接权限)
+[root@node11 ~]# ls /etc/ceph
+ceph.client.admin.keyring  ceph.conf  rbdmap  tmpOSu3zq
+[root@node11 ~]# scp /etc/ceph/ceph.* 192.168.4.10:/etc/ceph/
+ceph.client.admin.keyring                      100%   63    47.6KB/s   00:00    
+ceph.conf                                      100%  238   350.7KB/s   00:00    
+
+//查看镜像,映射为本地磁盘,然后格式化挂载,操作一致
+[root@client10 ~]# rbd ls
+test-image
+[root@client10 ~]# rbd map test-image     //由于已经在集群内已经格式化,所以映射后直接挂载
+/dev/rbd0
+[root@client10 ~]# mount /dev/rbd0 /mnt     
+//注意:挂载时能看到之前在node11写入的内容,但是之后写入的数据不互通(因为格式化方式为xfs)
+
+
+
+
+
