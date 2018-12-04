@@ -1,0 +1,234 @@
+mha集群--(mysql主从同步之半同步复制)
+
+1.集群环境准备
+数据库节点安装mha-node
+#yum -y install mha4mysql-node-0.56-0.el6.noarch.rpm	
+
+管理主机上安装mha-node和mha-manager
+#yum -y install mha4mysql-node-0.56-0.el6.noarch.rpm
+#tar -zxf mha4mysql-manager-0.56.tar.gz
+#cd mha4mysql-manager-0.56/
+#perl  Makefile.PL			//解决各种依赖包
+[Core Features]
+- DBI                   ...loaded. (1.627)
+- DBD::mysql            ...loaded. (4.023)
+- Time::HiRes           ...loaded. (1.9725)
+- Config::Tiny          ...loaded. (2.14)
+- Log::Dispatch         ...loaded. (2.41)
+- Parallel::ForkManager ...loaded. (1.18)
+- MHA::NodeConst        ...loaded. (0.56)
+#make && make install
+
+*所有节点和管理主机之间可以互相以SSH密钥认证登陆
+
+2. mysql主从同步(半同步复制)
+####主库配置####
+#vim /etc/my.cnf
+bind-address    = 0.0.0.0
+server-id       = 31
+log_bin         = mysql1-bin
+binlog-format   = "mixed"
+relay-log       = relay-log
+plugin-load     = "rpl_semi_sync_master=semisync_master.so;rpl_semi_sync_slave=semisync_slave.so"
+rpl_semi_sync_slave_enabled  = 1
+rpl_semi_sync_master_enabled = 1
+rpl_semi_sync_master_timeout = 3000			//默认超时时间10秒
+
+mysql>  grant  replication slave  on  *.*  to repluser@"%"  identified by "123456";
+
+
+####备用主库配置####
+#vim /etc/my.cnf
+bind-address    = 0.0.0.0
+server-id       = 32
+log_bin         = mysql2-bin
+binlog-format   = "mixed"
+relay-log       = relay-log
+plugin-load     = "rpl_semi_sync_master=semisync_master.so;rpl_semi_sync_slave=semisync_slave.so"
+rpl_semi_sync_slave_enabled  = 1
+rpl_semi_sync_master_enabled = 1
+rpl_semi_sync_master_timeout = 3000
+
+mysql> change master to master_host="192.168.1.31",
+    -> master_user="repluser",master_password="qqq123...A",
+    -> master_log_file="mysql-bin.000002",master_log_pos=441;
+mysql> start slave;
+mysql> show slave status\G;
+
+####从库配置####
+#vim /etc/my.cnf			//可以只添加server-id选项
+bind-address    = 0.0.0.0
+server-id       = 33
+log_bin         = mysql-bin
+binlog-format   = "mixed"
+relay-log       = relay-log
+
+mysql> change master to master_host="192.168.1.31",
+    -> master_user="repluser",master_password="qqq123...A",
+    -> master_log_file="mysql-bin.000002",master_log_pos=441;
+mysql> start slave;
+mysql> show slave status\G;
+
+3. 配置管理主机
+#mkdir /etc/mha		//创建工作目录
+#cp mha4mysql-manager-0.56/samples/conf/app1.cnf /etc/mha/
+#vim /etc/mha/app1.cnf
+[server default]
+manager_workdir=/etc/mha
+manager_log=/var/log/mha/manager.log
+master_ip_failover_script=/usr/local/bin/master_ip_failover	//准备故障切换脚本文件
+
+ssh_user=root
+ssh_port=22
+repl_user=repluser
+repl_password=qqq123...A
+user=root
+password=qqq123...A
+ping_interval=1
+
+[server1]
+hostname=mysql1
+candidate_master=1
+
+[server2]
+hostname=mysql2
+candidate_master=1
+
+[server3]
+hostname=mysql3
+no_master=1
+
+[server4]
+hostname=mysql4
+no_master=1
+
+[server5]
+hostname=mysql5
+no_master=1
+
+[server6]
+hostname=mysql6
+no_master=1
+
+#cp mha4mysql-manager-0.56/samples/scripts/master_ip_failover /usr/local/bin/
+#vim /usr/local/bin/master_ip_failover
+
+4. 测试MHA集群
+主库上做root授权(其他节点会同步,验证数据节点主从配置需要)
+mysql> grant all on *.* to root@"%" identified by "qqq123...A";
+
+# masterha_check_ssh --conf=/etc/mha/app1.cnf	//验证ssh配置
+Tue Dec  4 16:26:04 2018 - [info] All SSH connection tests passed successfully.
+
+# masterha_check_repl --conf=/etc/mha/app1.cnf
+//验证主从同步配置(先把配置文件中自动切换故障脚步注释掉
+
+# masterha_manager --conf=/etc/mha/app1.cnf --ignore_last_failover 
+# masterha_check_status  --conf=/etc/mha/app1.cnf		//另起一个终端查看状态
+# masterha_stop  --conf=/etc/mha/app1.cnf
+
+测试故障转移
+# ifconfig eth0:1 192.168.4.100/24	//主库绑定vip
+
+修改master_ip_failover脚本vip地址,启动服务
+# masterha_manager --conf=/etc/mha/app1.cnf --ignore_last_failover
+
+关闭主库服务
+#systemctl stop mysqld
+
+查询vip是否转移到备用主库上
+#ip a s | grep 192.168.1.100
+
+重启主库服务后将原本的主库添加为先主库的备用主库
+mysql> change master to master_host="192.168.1.32",
+    -> master_user="repluser",master_password="qqq123...A",
+    -> master_log_file="mysql-bin.000002",master_log_pos=441;
+mysql> start slave;
+mysql> show slave status\G;
+
+
+
+
+故障切换脚本
+#!/usr/bin/env perl
+use strict;
+use warnings FATAL => 'all';
+use Getopt::Long;
+use MHA::DBHelper;
+my (
+  $command,        $ssh_user,         $orig_master_host,
+  $orig_master_ip, $orig_master_port, $new_master_host,
+  $new_master_ip,  $new_master_port,  $new_master_user,
+  $new_master_password
+);
+my $vip = '192.168.1.100/24';   
+my $key = "1"; 
+my $ssh_start_vip = "/sbin/ifconfig eth0:$key $vip";
+my $ssh_stop_vip = "/sbin/ifconfig eth0:$key down";
+GetOptions(
+  'command=s'             => \$command,
+  'ssh_user=s'            => \$ssh_user,
+  'orig_master_host=s'    => \$orig_master_host,
+  'orig_master_ip=s'      => \$orig_master_ip,
+  'orig_master_port=i'    => \$orig_master_port,
+  'new_master_host=s'     => \$new_master_host,
+  'new_master_ip=s'       => \$new_master_ip,
+  'new_master_port=i'     => \$new_master_port,
+  'new_master_user=s'     => \$new_master_user,
+  'new_master_password=s' => \$new_master_password,
+);
+exit &main();
+sub main {
+  if ( $command eq "stop" || $command eq "stopssh" ) {
+    my $exit_code = 1;
+    eval {
+      &stop_vip();
+      $exit_code = 0;
+    };
+    if ($@) {
+      warn "Got Error: $@\n";
+      exit $exit_code;
+    }
+    exit $exit_code;
+  }
+  elsif ( $command eq "start" ) {
+    my $exit_code = 10;
+    eval {
+      my $new_master_handler = new MHA::DBHelper();
+      $new_master_handler->connect( $new_master_ip, $new_master_port,
+        $new_master_user, $new_master_password, 1 );
+      $new_master_handler->disable_log_bin_local();
+      print "Set read_only=0 on the new master.\n";
+      $new_master_handler->disable_read_only();
+      print "Creating app user on the new master..\n";
+      $new_master_handler->enable_log_bin_local();
+      $new_master_handler->disconnect();
+      &start_vip();
+      $exit_code = 0;
+    };
+    if ($@) {
+      warn $@;
+      exit $exit_code;
+    }
+    exit $exit_code;
+  }
+  elsif ( $command eq "status" ) {
+    exit 0;
+  }
+  else {
+    &usage();
+    exit 1;
+  }
+}
+sub start_vip() {
+    `ssh $ssh_user\@$new_master_host \" $ssh_start_vip \"`;
+}
+sub stop_vip() {
+    return 0 unless ($ssh_user);
+    `ssh $ssh_user\@$orig_master_host \" $ssh_stop_vip \"`;
+}
+sub usage {
+  print
+"Usage: master_ip_failover --command=start|stop|stopssh|status --orig_master_host=host --orig_master_ip=ip --orig_master_port=port --new_master_host=host --new_master_ip=ip --new_master_port=port\n";
+}
+
