@@ -1,0 +1,181 @@
+基于mycat实现读写分离
+
+mycat是基于java的分布式数据库系统中间件,环境准备
+#yum -y install java-1.8.0-openjdk-devel
+#tar -xf Mycat-server-1.6-RELEASE-20161028204710-linux.tar.gz		//免安装,解压即可使用
+#mv mycat/ /usr/local/			
+#cd /usr/local/mycat	//可能官网下载的tar包权限不安全,按需要修改
+#find ./ -type d -exec chmod 755 {} \;
+#find ./ -type f -exec chmod 644 {} \;
+#chmod +x ./bin/*
+
+修改配置文件server.xml与schema.xml
+#vim ./conf/server.xml			//主要修改用户配置,定义连接mycat服务器的用户和密码
+        <user name="root">
+                <property name="password">123456</property>
+                <property name="schemas">VIRDB</property>
+		//定义mycat服务器的逻辑数据库,实际不存在,多个可用逗号分隔
+        </user>
+        <user name="user">
+                <property name="password">user</property>
+                <property name="schemas">VIRDB</property>
+                <property name="readOnly">true</property>
+        </user>
+
+#vim ./conf/schema.xml		//定义后端数据库
+<?xml version="1.0"?>
+<!DOCTYPE mycat:schema SYSTEM "schema.dtd">
+<mycat:schema xmlns:mycat="http://io.mycat/">
+
+  <schema name="VIRDB" checkSQLschema="false" sqlMaxLimit="100" dataNode="dn1">
+  </schema>
+  <dataNode name="dn1" dataHost="mysql_cluster" database="testdb" />
+  <dataHost name="mysql_cluster" maxCon="1000" minCon="10" balance="3"
+        writeType="0" dbType="mysql" dbDriver="native" switchType="1"  slaveThreshold="100">
+    <heartbeat>select user()</heartbeat>
+    <writeHost host="mysql1" url="192.168.1.100:3306" user="root"
+           password="qqq123...A">
+      <readHost host="mysql3" url="192.168.1.33:3306" user="read" password="qqq123...A" />
+      <readHost host="mysql4" url="192.168.1.34:3306" user="read" password="qqq123...A" />
+      <readHost host="mysql5" url="192.168.1.35:3306" user="read" password="qqq123...A" />
+      <readHost host="mysql6" url="192.168.1.36:3306" user="read" password="qqq123...A" />
+    </writeHost>
+  </dataHost>
+</mycat:schema>
+
+
+###### Mycat配置文件说明 ######
+配置文件注意事项:
+conf/server.xml 可以不修改，但要注意 
+<property name="schemas">TESTDB</property>
+虚拟库名称，要和后面对应
+schemas是这个用户下的逻辑数据库可以有多个逻辑数据库可以用“,”逗号隔开 用户名和密码是连接 mycat 的用户名和密码，与 mysql 实例的用户名密码无关 mycat默认的普通连接端口是8066，管理连接端口是9066 schema：逻辑数据库 dataNode：节点
+dataHost：节点对应的读库写库的地址和连接
+balance指的负载均衡类型，目前的取值有4种：
+balance="0", 不开启读写分离机制，所有读操作都发送到当前可用的writeHost上。
+balance="1"，全部的readHost与stand by writeHost参与select语句的负载均衡
+balance="2"，所有读操作都随机的在writeHost、readhost上分发。
+balance="3"，所有读请求随机的分发到wiriterHost对应的readhost执行，writerHost不负担读压力
+
+switchType指的是切换的模式，目前的取值也有4种：
+switchType='-1' 表示不自动切换
+switchType='1'  默认值，表示自动切换
+switchType='2'  基于MySQL主从同步的状态决定是否切换,心跳语句为 show slavestatus
+switchType='3'  基于MySQL galary cluster的切换机制（适合集群）（1.4.1），心跳语句为 show status like 'wsrep%'
+    
+WriteType参数设置：
+writeType=“0”, 所有写操作都发送到可用的writeHost上。
+writeType=“1”，所有写操作都随机的发送到readHost。
+writeType=“2”，所有写操作都随机的在writeHost、readhost分上发。
+
+################################
+
+
+启动服务并查看状态
+#/usr/local/mycat/bin/mycat start
+#/usr/local/mycat/bin/mycat status	//查看状态
+#ss -nutlp		//查看端口8066 9066
+#jps			//查看角色
+
+客户端访问
+#for i in `seq 100`;do mysql -uuser -puser -hmycat1 -P8066 -e "select @@hostname";done | sort |uniq -c
+//使用mycat只读用户访问查询数据库100次查看均衡效果
+
+
+Mycat集群(haproxy+keepalived)
+只需要将第一台配置好的Mycat程序目录拷贝到集群中的其他主机,启动服务即可!
+
+再使用haproxy+keepalived调度访问Mycat集群
+准备两台主机,安装haproxy和keepalived
+#yum -y install haproxy keepalived
+#vim /etc/haproxy/haproxy.cfg		//保留全局配置和默认配置,删除其他不需要的配置
+listen mycat_3306 *:3306			//定义前端监听端口
+   mode         tcp		
+   option       tcpka			//使用keepalive长连接
+   balance      leastconn		//长连接不适合使用轮询算法,因此使用最小连接调度算法
+   server mycat1 192.168.1.21:8066 check inter 3000 rise 1 maxconn 1000 fall 3
+   server mycat2 192.168.1.22:8066 check inter 3000 rise 1 maxconn 1000 fall 3
+   server mycat3 192.168.1.23:8066 check inter 3000 rise 1 maxconn 1000 fall 3
+#systemctl restart haproxy
+
+打开多个客户端访问
+#mysql -uroot -p123456 -hhaproxy1
+
+在haproxy主机上查看调度情况
+#ss -ant
+State       Recv-Q Send-Q  Local Address:Port   Peer Address:Port              
+LISTEN      0      128     *:3306               *:*                  
+LISTEN      0      128     *:22                 *:*                  
+ESTAB       0      0       192.168.1.11:3306    192.168.1.132:43852              
+ESTAB       0      0       192.168.1.11:58824   192.168.1.23:8066		//本地访问mycat3服务
+ESTAB       0      0       192.168.1.11:22      192.168.1.132:56916
+ESTAB       0      0       192.168.1.11:22      192.168.1.132:56906
+ESTAB       0      0       192.168.1.11:22      192.168.1.132:56922
+ESTAB       0      0       192.168.1.11:3306    192.168.1.132:43850
+ESTAB       0      0       192.168.1.11:58386   192.168.1.21:8066		//本地访问mycat1服务
+
+将haproxy1的配置文件拷贝到haproxy2上,启动服务
+#systemctl restart haproxy
+
+
+配置keepalived
+   script "killall -0 haproxy"     # cheaper than pidof
+   interval 2                      # check every 2 seconds
+}
+
+vrrp_instance mycat_1 {
+    state BACKUP
+    interface eth0
+    virtual_router_id 51
+    priority 200
+    ! nopreempt
+    advert_int 2
+    authentication {
+        auth_type PASS
+        auth_pass 1234
+    }
+    virtual_ipaddress {
+        192.168.1.101/24 brd 192.168.1.255 dev eth0 label eth0:1
+    }
+    track_script {
+       chk_haproxy weight=0    # +2 if process is present
+    }
+}
+
+vrrp_instance mycat_2 {
+    state BACKUP
+    interface eth0
+    virtual_router_id 52
+    priority 100
+    nopreempt
+    advert_int 2
+    authentication {
+        auth_type PASS
+        auth_pass 2345
+    }
+    virtual_ipaddress {
+        192.168.1.102/24 brd 192.168.1.255 dev eth0 label eth0:2
+    }
+    track_script {
+       chk_haproxy weight=0    # +2 if process is present
+    }
+}
+
+           
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
