@@ -1,0 +1,400 @@
+ansible简介
+可以实现的功能：
+1、自动化部署app
+2、自动化管理配置项
+3、自动化持续交付
+4、自动化（AWS）云服务管理
+
+选择一款软件从几个方面权衡利弊
+社区活跃度 学习成本 使用成本 编码语言 性能 使用是否广泛
+
+ansible优点
+只需要ssh和python即可使用
+无客户端
+功能强大，模块丰富
+上手容易，门槛低
+基于python开发，易于做二次开发
+使用公司较多，社区活跃
+
+安装ansible（可以基于源码运行）
+软件依赖关系
+
+管理主机
+要求python2.6或python2.7
+ansible使用的模块都需要安装
+paramiko、PyYAML、Jinja2、httplib2、six
+
+被托管的主机
+开启ssh服务，允许ansible主机登陆，python2.5以上版本
+若托管节点上开启了SELinux，则需要安装libselinux-python
+
+源码安装
+1、pip,需要配置扩展软件包源extras
+2、git
+	#yum install epel-release
+	#yum install git python2-pip
+3、pip安装依赖模块
+	#pip install paramiko PyYAML Jinja2 httplib2 six
+4、源码下载ansible
+	#git clone git://github.com/ansible/ansible.git
+	#yum install python-setuptools python-devel
+	#python setup.py build		//相当于C语言源码安装的make
+	#python setup.py install		//相当于C语言源码安装的make install
+5、pip方式安装ansible
+	#pip install ansible
+
+yum扩展源安装ansible（自动解决依赖关系，推荐使用）
+#yum -y install ansible		//需要自己准备安装包,搭建yum仓库
+#ansible --version	//验证查看版本
+
+ansible配置文件查找顺序
+1 首先检测ANSIBLE_CONFIG变量定义的配置文件
+2 其次检查当前目录下的./ansible.cfg文件
+3 再次检查当前用户家目录下的~/ansible.cfg文件
+4 最后检查/etc/ansible/ansible.cfg文件
+//可以根据这个特性,设置同一台机器上不同的用户不同的管理群组对象
+/etc/ansible/ansible.cfg是ansible的默认配置文件路径
+
+#vim /etc/ansible/ansible.cfg
+[defaults]
+inventory  = /etc/ansible/hosts	//定义托管主机地址的配置文件路径
+host_key_checking = False		//关闭主机密钥检测
+
+#vim /etc/ansible/hosts		//修改托管主机的配置文件
+[群组名]		//定义一个群组
+主机名1
+主机名2
+主机名[3:50]		//连续定义主机
+
+[群组名:children]	//可以用群组定义多个群组
+群组1
+群组2
+
+[群组名:vars]		//定义某一个群组的变量,该群组所有主机同时定义相同的变量
+ansible_ssh_user=root
+ansible_ssh_pass=123456
+
+测试
+#ansible 群组名称 --list-hosts	//可以用all表示所有主机
+
+inventory参数
+ansible_ssh_host	//远程主机名与设定的主机别名不同,可以通过此变量设置
+ansible_ssh_port	//如果ssh不是默认的22号端口,可以通过此变量修改
+ansible_ssh_user	//指定远程的用户名
+ansible_ssh_pass	//远程密码,此方法不安全,建议使用--ask-pass或密钥登陆
+ansible_sudo_pass	//sudo密码,建议使用--ask-sudo-pass
+ansible_sudo_exe	//sudo命令路径,适用于1.8以上版本
+
+动态主机
+静态Inventory指在文件/etc/ansible/hosts中指定的主机和组
+动态Inventory指通过外部脚本获取主机列表,按照其要求格式(JSON)返回给ansible命令
+#vim host.py	//编写脚本输出主机列表
+#!/usr/bin/python
+import json
+hostlist = {}
+hostlist["bb"] = ["192.168.1.52", "192.168.1.53"]
+hostlist["192.168.1.54"] = {
+         "ansible_ssh_user":"root","ansible_ssh_pass":"pwd"
+        }
+hostlist["aa"] = {
+         "hosts" : ["192.168.1.55", "192.168.1.56"],
+         "vars"  : {
+              "ansible_ssh_user":"root","ansible_ssh_pass":"pwd"
+         }
+}
+print(json.dumps(hostlist))
+#chmod 755 ./host.py
+#vim /etc/ansible/ansible.cfg
+inventory = host.py
+#ansible aa --list-hosts	//测试
+
+
+给所有主及部署公钥
+#ssh-keygen -t rsa -b 2048 -N ''	//创建密钥
+#ansible all -m authorized_key -a \
+>"user=root exclusive=true manage_dir=true key="$(< /root/.ssh/id_rsa.pub)'" -k -v
+//exclusive=true表示若公钥已存在，则直接覆盖，manage_dir=ture表示若目录不存在则直接创建
+
+
+ansible-doc模块手册（相当于shell的man帮助手册）
+#ansible-doc -l	//列出所有模块
+#ansible-doc 模块名称	//查看指定模块帮助
+
+ping模块
+测试网络连通性（测试ssh的连通性），该模块没有参数
+#ansible 主机或组名 -m ping
+
+command模块(默认模块)
+#ansible 主机或组名 -m command -a ‘执行的命令’
+*注意：由于该模块不启动shell直接在ssh进程中执行，所以所有使用到shell内置命令的执行都会失败
+shell内置命令： set、>、 <、 |、 & 等
+
+shell/raw模块
+shell基本用法与command相同，区别是shell模块通过/bin/sh进行命令执行，可以执行任意命令，支持内置命令
+raw用法与shell基本相同，区别是raw没有chdir、creates、removes参数（chdir修改工作目录）
+
+command 默认模块，尽量少用
+raw	适用广，但不支持chdir
+shell	万能，优先使用
+
+script模块，远程执行本地脚本（只要指定Sha-bang（#!）解释器的脚本都可以运行）
+#ansible web -m script -a '脚本路径'
+*注意,建议使用playbook执行批量任务,脚本无法判断执行结果是否全都正确
+
+copy模块 复制文件到远程主机
+必要参数src、dest
+src=源路径
+dest=目标路径
+backup yes|no //覆盖前备份原文件,原文件备份会包含时间信息
+force 	//强制覆盖，默认为yes
+
+lineinfile模块 类似sed的一种行编辑替换模块
+path=目标文件路径
+regexp=正则表达式
+line=替换后的结果（全行替换）
+#ansible all -m lineinfile -a \
+"path=/etc/resolv.conf \
+regexp='(\.114){3}' \
+line='nameserver 8.8.8.8'"
+
+replace模块
+path=目标文件路径
+regexp=正则表达式
+replace=替换内容（只替换匹配的字符）
+#ansible all -m replace -a \
+"path=/etc/resolv.conf \
+regexp='^(nameserver).*'
+replace='\1 192.168.1.254'"
+
+yum模块
+config_file yum的配置文件
+disable_gpg_check 关闭gpg_check
+disablerepo 不启用某个源
+enablerepo 启用某个源
+name 要进行操作的软件包名字,也可以传递一个url或本地的rpm包的路径,必选项
+state 状态(removed installed latest)必选项
+
+service模块
+name 必选项
+enabled yes|no 设置开机自启
+state 执行动作(started stopped restarted)
+
+setup模块(查看所有变量,使用filter过滤指定关键字)
+#ansible 群组名 -m setup -a "filter=关键字"
+
+*补充知识,httpd使用apachectl -t命令时会报错
+修改/etc/httpd/conf/httpd.conf文件,
+#vim /etc/httpd/conf/httpd.conf
+ServerName 0.0.0.0
+
+ansible的七种武器
+1 ansible命令 用于执行临时性工作,必须掌握
+2 ansible-doc 是ansible模块的文档说明,必须掌握
+3 ansible-console 交互式工具
+4 ansible-galaxy 从github上下载管理roles的一款工具(与python的pip相似)
+5 ansible-playbook 日常应用中使用频率最高的命令,实现批量管理,必须掌握
+6 ansible-vault 用于配置文件加密/解密
+7 ansible-pull 两种工作模式pull/push,默认为push
+
+JSON简介
+JSON(javaScript Object Notaion),是JavaScript对象表示法
+一种基于文本独立于语言的轻量级数据交换格式
+JSON的分隔符限于 单引号 小括号 中括号 大括号 冒号和逗号
+JSON是纯文本,具有自我描述性(人类可读),具有层级结构(值中有值),可通过JavaScript解析
+
+语法规则
+数据在名称/值对中
+数据由逗号分隔
+大括号保存对象(键值对)
+中括号保存数组
+
+YAML简介(YAML Ain't Markup Language)
+YAML是一个可读性高,用来表达数据序列的格式
+YAML的结构通过空格来展示(空格为严格要求)
+数组使用"- "表示(减号后面有个空格!!!)
+键值对使用": "表示(冒号后面有个空格!!!)
+YAML使用一个固定的缩进风格表示数据层级结构关系
+一般每个缩进级别由两个以上空格组成
+井号表示注释
+*注意,严禁使用tab,同一层级缩进必须对齐
+
+
+Jinja2模板简介
+Jinja2是基于Python的模板引擎,包含变量和表达式两部分,两者在求值时会被替换为值
+模板中还有标签,控制模板的逻辑(playbook的模板使用python的Jinja2模块来处理)
+
+Jinja2模板基本语法
+模板的表达式都是包含载分隔符{{  }}内
+控制语句都是包含在分隔符{%  %}内
+模板支持注释,都是包含在分隔符{#  #}内,支持块注释
+
+playbook简介
+playbook是ansible用于配置,部署和管理托管主机的剧本
+通过playbook的详细描述,执行其中一系列的tasks
+playbook可是反复使用编写的代码,最大化利用代码
+
+playbook语法格式
+playbook由YAML语言编写,遵循YAML标准
+同一行中,#之后的内容表示注释
+同一个列表中的元素应该保持相同的缩进
+playbook由一个或多个play组成
+play中hosts,variables,roles,tasks等对象的表示方法都是键值中间以": "分隔表示
+*注意YAML由一个小怪癖,他的文件开始行都应该是---(3个减号),表明一个文件的开始
+
+playbook构成
+target:定义将要执行playbook的远程主机组(必要选项)
+variable:定义playbook运行时需要使用的变量
+tasks:定义将要在远程主机上执行的人物列表(必要选项)
+handler:定义task执行完成以后需要调用的任务
+
+playbook执行结果输出内容为JSON格式
+
+第一个playbook文件(注意空格缩进有严格要求!!)
+#vim myping.yml
+---
+- hosts: all
+  remote_user: root
+  tasks:
+    - ping: 
+#ansilbe-playbook myping.yml
+
+使用变量
+#vim user.yml
+---
+- hosts: all
+  remote_user: root
+  vars:
+    username: plj
+  tasks:
+    - user: 
+        name: "{{username}}"
+        group: "root"
+        password: "{{'123456'|password_hash('sha512')}}"
+    - shell: chage -d 0 {{username}}
+
+errors错误处理(忽略错误继续执行)
+添加ignore_errors: Ture  //对上一条相同缩进的指令生效
+
+handlers触发
+#vim httpd.yml
+---
+- hosts: all
+  remote_user: root
+  tasks:
+    - yum:
+      name: httpd
+      state: installed
+    - lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        regexp: "^Listen"
+        line: 'Listen 8080'
+      notify: 
+        - restart httpd
+    - lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        regexp: "^#(ServerName).*"
+        line: "\1  localhost:8080"
+    - shell 'echo "hello world!" > /var/www/html/index.html'
+    - shell apachectl -t
+  handlers:
+    - name: restart httpd
+      server:
+        name: httpd
+        state: restared
+//handlers中的- name必须有,类似于函数名,在tasks中调用
+  
+when判断,满足特定条件后再触发某一操作
+样例:
+tasks:
+  - name: 命令描述
+    command: 执行的命令 
+    when: 判断的内容
+
+- name: Install httpd
+  hosts: all
+  tasks: 
+    - name: Install httpd by yum
+      yum: name=httpd state=installed
+      when: ansible_os_family == "ReadHat"
+    - name: Install httpd by apt
+      apt: name=httpd state=installed
+      when: ansible_os_family == "Debian"
+
+register模块保存前一个命令的返回状态,在后面进行调用
+例子一
+tasks:
+  - shell: id {{username}}
+    register: result
+  - user: password={{'123456'|password_hash('sha512')}} name={{username}}
+    when: result
+
+例子二
+---
+- hosts: all
+  remote_user: root
+  tasks:
+    - shell: uptime | awk '{printf("%.2f\n",$(NF-2))}'
+      register: result
+    - shell: 报警命令
+      when: result.stdout|float > 0.5
+
+with_items是playbook标准循环
+---
+- hosts: all
+  remote_user: root
+  tasks:
+    - name: add users
+      user: 
+        group: {{item.group}}
+        password: {{'123456'|password_hash('sha512')}}
+        name: {{item.name}}
+      with_items:
+        - {name: "a", group: "root"}
+        - {name: "b", group: "root"}
+        - {name: "c", group: "whell"}
+        - {name: "d", group: "whell"}
+
+with_nested嵌套循环
+tags定义调用标识
+#ansible-playbook xxx.yml --tags=标识名	//调用方式
+
+include and roles
+类似调用配置文件,将复杂的task handler等放入其他文件,再使用include指令包含进来
+tasks:
+  - include: 路径/xxxx.yml
+
+debug
+检测语法
+#ansible-playbook --syntax-check xxx.yml
+
+测试运行
+#ansible-playbook -C xxx.yml
+
+其他参数
+--list-hosts 显示受到影响的主机(重要)
+--list-tasks 显示工作的task
+--list-tags  显示将要运行的tag
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

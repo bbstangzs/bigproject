@@ -1,0 +1,89 @@
+服务与安全监控
+iptables防火墙服务（rhel6）
+firewalld防火墙服务（rhel7）
+
+#rpm -qa | grep iptables(rhel7的iptables服务默认没安装)
+#yum -y install iptables-server
+#servive iptables start
+#chkconfig iptables on	//设置开机自启（rhel6专用命令）
+
+iptables的表、链结构
+4个表（区分大小写）：
+状态跟踪表（raw表）：对状态做跟踪的（是否已连接）（PREROUTING OUTPUT）
+包标记表（mangle表）：给到达防火墙的ip包打标签 （5种链全有）
+地址转换表（nat表）：公网私网地址转换 （INPUT OUTPUT PREROUTING POSTROUTING）
+过滤表（filter表）：iptables的默认表，过滤数据包，自己编写过滤条件 (INPUT OUTPUT FORWARD)
+
+5个链（区分大小写）
+INPUT链（入站规则） 进入防火墙本机ip包
+OUTPUT链（出站规则）从防火墙本机出去的ip包
+FORWARD链（转发规则）经过防火墙主机的ip包
+PREROUTING链（路由前规则）
+POSTROUTING链（路由后规则）
+
+处理动作（ip包到达防火墙服务后，与规则匹配之后的处理方式,区分大小写）
+ACCEPT	允许通过/放行
+DROP		丢弃，不给任何回应
+REJECT	拒绝通过，必要时会给出提示
+LOG		记录日志，然后传给下一条规则（匹配即停止规则的例外）
+
+iptables命令格式
+#iptables [-t 表名] 选项 [ 链名 ] [ 条件 ] [ -j 目标操作 ]
+#service iptables save	//保存规则设置以永久生效
+
+常用管理选项
+添加规则	-A	在链的末尾追加一条规则
+		-I	在链的开头或者指定序号插入一条规则
+查看规则	-L	列出所有的规则条目
+		-n	以数字形式显示地址、端口等信息
+	--line-numbers	查看规则时，显示规则的序号
+删除规则	-D	删除链内指定序号或内容的一条规则
+		-F	清空所有的规则
+默认策略	-P	为指定的链设置默认规则
+
+基本匹配条件(需要区反条件时，用感叹号"!")
+通用匹配
+1.协议匹配	-p 协议名
+2.地址匹配	-s 源地址	-d 目标地址
+3.接口匹配	-i 收数据的网卡	-o 发数据的网卡
+
+隐含匹配
+1.端口匹配	--sport 源端口	--dport 目标端口
+2.ICMP类型匹配	--icmp-type ICMP类型
+例：允许本机ping其他主机，但是禁止其他主机ping本机
+#iptables -t filter -A INPUT -t icmp --icmp-type echo-request -j DROP
+#iptables -t filter -A INPUT -t icmp --icmp-type echo-reply -j ACCEPT
+
+扩展匹配（需要对应的防火墙模块支持）
+基本用法
+-m 扩展模块 --扩展条件 条件值
+
+常见的扩展条件类型
+MAC地址匹配	-m mac --mac-source mac地址
+多端口匹配	-m multiport --sports 源端口列表
+		-m multiport --dports 目标端口列表
+IP范围匹配	-m iprange --src-range ip1-ip2
+		-m iprange --dst-range ip1-ip2
+
+nat表典型应用
+SNAT源地址转换（Source Network Address Translation）
+修改数据包的源地址
+仅用于nat表的POSTROUTING链
+#iptables -t nat -A POSTROUTING -s 内网网段 -p tcp \
+  --dport 80 -j SNAT --to-source  公网接口ip地址
+//若有多个公网接口网卡，可添加-o选项指定发数据包的网卡设备
+*需要在过滤表filter的FORWARD链中允许通过，否则无法访问外网
+
+地址伪装策略（共享动态公网IP实现上网）
+主要针对外网接口的ip地址不固定的情况
+将SNAT改为MASQUERADE即可
+对于ADSL宽带拨号连接，网络接口可写为ppp+
+#iptables -t nat -A POSTROUTING -s 192.168.4.0/24 -o eth1 -j MASQUERADE
+
+
+
+
+
+
+
+

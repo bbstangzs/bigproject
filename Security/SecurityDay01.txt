@@ -1,0 +1,161 @@
+一、Linux基本防护
+用户帐号安全
+设置帐号有效期
+使用chage工具 chage -h 查看帮助信息
+chage -d 0 用户名  //强制修改密码
+chage -E 2018-12-31 用户名  //指定失效日期为2018-12-31（-1取消）
+chage -E -1 用户名
+
+帐号的锁定/解锁
+使用passwd命令
+-l 锁定、  -u 解锁、  -S 查看状态
+
+强制定期修改密码
+配置文件/etc/login.defs（对新建用户有效）
+主要控制属性
+pass_max_days
+pass_min_days
+pass_warn_age
+
+伪装登陆提示(修改tty终端提示)
+配置文件/etc/issue /etc/issue.net
+分别适用于本地、远程登陆
+默认会提示内核、系统等版本信息
+vim /etc/issue 查看并修改隐藏登陆信息
+
+家目录控制文件
+配置/etc/skel
+用户创建时，会在此目录下拷贝初始文件到新用户的家目录下
+应用方法：预先将用户需要使用到的文件拷贝至/etc/skel下，此后创建的所有用户可以直接在家目录下看到此文件
+
+*附加：文件系统也可以通过添加额外属性来提高性能与安全性,例：
+vim /etc/fstab 
+/dev/vda1 /boot xfs defaults,noexec 0 0
+/dev/vda3 /home xfs defaults,noatime 0 0
+noexec属性可以让分区下的所有程序都不可执行，包括病毒和木马
+noatime属性让分区下的所有文件都不再更新atime时间，atime时间为文件的访问时间
+
+二、文件系统安全
+锁定/解锁保护文件
+EXT3/EXT4的文件属性控制（chattr、 lsattr）
+控制方式：+ - =
+属性i:不可变（immutable）
+属性a：仅可追加（append only）
+
+程序和服务控制
+禁用非必要的系统服务
+使用systemctl工具（rhel7系统）、chkconfig工具（rhel6系统）
+chkconfig 服务 on/off = systemctl enable/disable 服务
+chkconfig --list =systemctl list-unit-files  //查看所有开机启动项
+service 服务 start/stop = systemctl start/stop 服务
+
+
+三、用户切换与提权
+su（substitute user）切换用户身份
+su [-] 用户            // 加上"-"选项同时切换系统环境为用户的环境
+su [-] -c “命令” 用户  //切换到某用户执行命令
+从普通用户切换到root，并登陆到root的环境
+$su - [root]  //root可省略 默认为切换到root
+#whoami     //查看当前登陆用户
+*分析su切换的使用情况，查看安全日志/var/log/secure，记录su验证、shell开启与关闭
+
+sudo提升执行权限
+super or another do（超级执行）
+管理员预先为用户设置执行许可
+被授权用户有权执行授权的命令，验证自己的口令
+$sudo 特权命令
+$sudo [-u 目标用户] 特权命令
+$sudo -l //查看自己的sudo授权
+
+配置sudo授权
+修改方法：1、visudo(推荐) 2、vim /etc/sudoers
+授权记录格式如下：
+用户(可以是%组名)	主机列表=命令列表
+root		ALL=(ALL)		ALL
+mike		localhost,主机名=/sbin/*,!/sbin/ifconfig eth0  
+//允许mike以root权限执行/sbin/下的所有命令，但是禁止修改eth0网卡参数`1
+%group	localhost,主机名=/usr/bin/systemctl * httpd , /usr/bin/vim /etc/httpd/conf.d/*
+
+sudo别名设置（提高可重用性、易读性、简化配置、使记录更有条例）
+User_Alias 别名名称（必须全大写）=用户名列表
+Host_Alias 别名名称=主机名列表
+Cmnd_Alias 别名名称=命令列表
+
+分析sudo提权的使用情况（启用日志）
+配置文件中添加配置
+#vim /etc/sudoers
+Defaults logfile="/var/log/sudo.log"  //文件名随意，最好有标识性
+
+四、SSH访问控制
+SSH基本防护（基本安全配置,修改配置文件/etc/ssh/sshd_config）
+Port 3389	//改用非标准端口
+Protocol 2	//启用ssh V2版本协议
+ListenAddress ip地址	//监听的地址（只允许本地址接收ssh请求）
+PermitRootLogin no	//禁止root登陆
+PermitEmptyPasswords no	//禁止密码为空的用户登陆
+UseDNS no	//不解析客户机地址
+LoginGraceTime 1m	//登陆限时
+MaxAuthTries 3	//每次连接最多认证次数
+DenyUsers user1  user2 ... 		//黑白名单，允许或禁止用户或组访问
+AllowUsers user1@host1,host2 *@host2 *@192.168.0.*... 
+DenyGroups group1 group2 ...
+AllowGroups group1 group2 ...
+
+#passwd -d 用户	//清空用户密码
+#ssh 无密码用户@服务端ip	//登陆测试能发现登陆失败，因配置了禁止空密码登陆选项
+
+五、SSH密钥对验证
+创建SSH密钥对（使用ssh-keygen工具）
+可手动指定加密算法-t rsa 或-t  dsa(默认采用rsa加密)
+配置密钥对认证登陆后，关闭口令认证登陆，只允许密钥认证登陆，增加安全性
+PasswordAuthentication no
+
+SELinux安全防护
+#vim /etc/selinux/config
+SELINUXTYPE=targeted //推荐配置，仅保护最常见/关键的网络服务，其他不限制
+#sestatus	//查看selinux状态
+
+SELinux策略设置
+安全上下文值（Security Context）
+为文件/目录/设备标记访问控制属性（使用ls -Z选项查看安全上下文值）
+属性构成——用户：角色：访问类型：选项 
+
+修改安全上下文（使用chcon工具）
+chcon -t 指定访问类型
+chcon -R 递归修改
+一般操作规律
+移动的文件，原有的上下文属性不变
+复制的文件，自动继承目标位置的上下文
+创建的文件，自动继承父目录的上下文
+
+重置安全上下文（使用restorecon工具）
+恢复为所在位置的默认上下文属性，添加-R选项递归修改
+touch /.autorelabel //下次重启后，selinux设置全部重置？
+
+调整SElinux布尔值
+使用getsebool -a 查看列出所有布尔值（可grep过滤关键字）
+使用setsebool设置修改 -P永久修改
+*以ftp服务为例
+#setenforce 1
+#yum -y install vsftpd
+#vim /etc/vsftpd/vsftpd.conf
+...
+anon_upload_enable=YES //注释有提示需要打开哪些SELinux布尔值
+...
+#systemctl restart vsftpd
+#setsebool -P ftpd_full_access on
+#setsebool -P ftpd_anon_write on
+客户端登陆测试上传
+#ftp 服务端ip地址 (登陆后输入帐号ftp，密码为空，即可匿名登陆)
+ftp>cd pub		
+ftp>get test.txt	//下载ftp上的文件
+ftp>lcd /etc	//切换本地目录为etc
+ftp>put hosts	//上传本地的hosts文件
+
+如何查看服务对应的SELinux布尔值
+#rpm -qa | grep -i shoot //查看SELinux的监控程序setroubleshoot安装情况
+#tailf /var/log/messages
+#sealert -l selinux生成的信息代码   //通过此条信息获得布尔值设置的对应选项
+
+
+

@@ -1,0 +1,199 @@
+服务安全与监控
+系统审计
+基于事先配置的规则生成日志，记录可能发生在系统上的事件
+审计不会为系统提供额外的安全保护，但是会发现并记录违反安全策略的人以及对应的行为
+部署audit
+安装audit软件包
+#yum -y install audit
+主配置文件/etc/audit/auditd.conf
+日志文件log_file=/var/log/audit/audit.log
+
+配置审计
+#auditctl -s	//查询状态
+#auditctl -l	//查看规则
+#auditctl -D	//删除所有规则
+
+定义临时规则
+定义文件系统规则的语法
+#auditctl -w 路径 -p 操作权限 -k 定义规则名字
+路径为需要审计的文件或目录
+操作权限可以是r,w,x,a（文件或目录的属性发生变化）
+定义规则名字为可选项，方便标识哪些规则生成的特定日志
+例：
+#auditctl -w /etc/passwd -p wa -k passchange
+//设置规则所有对passwd的写、属性修改操作都会都被记录审计日志
+#auditctl -w /usr/bin/rm -p x -k mon_rm	
+//所有的删除操作都会被记录审计日志
+*不能执行的文件就不需要对文件设置执行操作的审计了
+
+定义永久规则（写入配置文件）
+#vim /etc/audit/rules.d/audit.rules
+在文件末尾插入
+-w 路径 -p 操作权限 -k 定义规则名字
+*格式与auditctl -l的输出内容相同
+
+扩展知识
+通过审核也可以监控系统调用
+#cat /usr/include/asm/unistd_64.h
+//该路径/usr/include下有很多系统调用文件，可以直接用于监控
+另外，规则参考模板可以在/usr/share/doc/audit-版本号/rules/目录下查看
+
+查看日志（定义规则后查看对应审计情况）
+#auditctl -w /etc/ssh/sshd_config -p rwxa -k sshd_config
+#tailf /var/log/audit/audit.log
+
+日志的格式内容
+msg为（time_stamp:ID），时间是date +%s ，即从1970年1月1日开始到此刻过了多少秒
+arch=c000003e,代表x86_64(16进制)
+success=yes/no，事件是否成功
+a0到a3是程序调用时前4个参数，16进制编码
+ppid，pid 父进程ID与进程ID
+auid是审核用户的id，su - test 依然可以追踪su前的账户
+uid，gid 用户与组
+tty 从哪个终端执行的命令
+comm=“命令” 用户在命令行执行的指令
+exe=“路径” 实际程序的路径
+key="定义的规则名字"
+tpye=CWD 用来记录当前工作目录 
+type=PATH 
+
+#ausearch -k 指定查看规则名称 -i	//搜索指定规则的内容，-i为交互式操作
+//默认该程序会搜索/var/log/audit/audit.log日志，可以使用-if 指定文件名
+
+服务安全
+一、Nginx安全
+删除不需要的模块（Nginx是模块化设计）
+最小化安装永远是对的(不需要的模块使用--without禁用)
+--without-http_autoindex_module	//取消自动索引功能
+*自动索引即，如果该路径下没有首页文件，则显示该路径下的所有文件
+--without-http_ssi_module
+//该功能仍不完善
+
+修改版本信息
+方法一：隐藏版本号信息
+#vim /usr/local/nginx/conf/nginx.conf
+http {
+...
+server_tokens off;
+...
+}
+#nginx -t	//测试配置文件语句是否有错误
+#nginx -s reload
+#curl -I ip地址	//测试访问查看版本信息变化
+
+方法二：修改源码(进入源码包目录下，需要在安装Nginx软件之前进行配置)
+#vim +48 src/http/ngx_http_header_filter_module.c  //+48表示光标定位到第48行
+ngx_http_server_string[] = "Server: L29" CRLF;
+static u_char ngx_http_server_full_string[] = "Server: L29 "  CRLF;
+static u_char ngx_http_server_build_string[] = "Server: L29"  CRLF;
+//修改后进行编译安装（Server:后内容随意填写）
+
+限制并发
+ngx_http_limit_req_module（默认模块）
+该模块可以降低DDos攻击风险，修改配置文件设置
+http(
+limit_req_zone $binary_remote_addr zone=one:10m rate=1r/s;
+	server {
+		listen 80;
+		limit_req zone=one burst=5;
+	}
+}
+//将客户端IP信息存储到名称为one的共享内存中，内存空间为10M
+1M可以存储8千个IP信息，10M存8万个主机状态
+每秒仅接受1个请求，多余的放入漏斗，漏斗超过5个则报错（丢弃）
+使用ab工具测试效果
+#ab -c 100 -n 100 http://ip地址/	//末尾的/不可以省略，多余的包会被丢弃
+
+拒绝非法请求
+常见http请求方法（一般仅需要get和post）
+请求方法	功能描述
+get		请求指定的页面信息，并返回实体主体
+head		类似于get请求，只不过返回的响应重没有具体内容，用于获取报头
+post		向指定资源提交数据进行处理请求（例如提交表单或上传文件）
+delete	请求服务器删除指定的页面
+put		向服务器特定位置上传资料
+...		其他
+
+禁用其他方法，仅允许GET或POST
+#vim /usr/local/nginx/conf/nginx.conf
+http {
+	server {
+	listen 80;
+	if ($request_method !~ ^(GET|POST)$) {
+		return 404;		//返回值随意填写
+		}
+	}
+}
+重启服务后使用#curl -i -X 请求方法 ip地址 进行测试	
+
+防止buffer溢出
+防止客户端请求数据溢出，导致数据泄露，有效降低机器Dos攻击风险
+#vim /usr/local/nginx/conf/nginx
+http{
+	client_body_buffer_size 1k;
+	client_header_buffer_size 1k;
+	client_max_body_size 16k;
+	large_client_header_buffers 4 4k;
+}
+
+二、数据库安全
+以下只针对mariadb（mysql5.7已修复这些问题）
+#mysql_secure_installation	//执行初始化安全脚本（确保服务已启动）
+进入交互配置选项，输入旧密码，设置新密码，同时配置以下几项
+remove anonymous users 删除匿名账户
+disallow root login remotely 禁止root远程登陆
+remove test database 删除测试数据库
+reload privilege 刷新权限
+
+数据库密码安全（清除历史记录内的明文密码）
+#cat /root/.bash_history		//命令行历史记录
+#cat /root/.mysql_history	//mysql历史命令
+
+使用tcpdump抓包（查看分析抓包数据）
+#tcpdump -w log -i eth0 src or dst port 3306
+#tcpdump -A -r log
+
+三、Tomcat安全
+隐藏版本信息
+#yum -y install java-1.8.0-openjdk-devel
+#cd /usr/local/tomcat/lib
+#jar -xf catalina.jar
+#vim org/apache/catalina/util/ServerInfo.properties
+server.info=修改内容
+server.number=修改内容
+server.built=修改内容
+#vim /usr/local/tomcat/conf/server.xml	//添加server选项
+<Connector port="8080" protocol="HTTP/1.1"
+               connectionTimeout="20000"
+               redirectPort="8443" server="LJJCS"/>
+重启服务后使用curl -I测试
+
+降权启动（使用非root启动tomcat服务）
+#useradd tomcat
+#chown -R tomcat:tomcat /usr/local/tomcat
+#su tomcat -c /usr/local/tomcat/bin/startup.sh
+
+开机启动
+#chmod +x /etc/rc.local
+#vim /etc/rc.local 
+su -c /usr/local/tomcat/bin/startup.sh tomcat	//添加内容
+
+删除默认的测试页面
+#rm -rf /usr/local/tomcat/webapps/
+
+Linux安全补丁
+diff逐行比较
+diff的原则是告诉我们如何修改第一个文件后能得到第二个文件
+选项
+-u 输出统一内容的头部信息（打补丁使用）
+-r 递归对比目录重的所有资源（可以对比目录）
+-a 所有文件视为文本（包括二进制程序）
+-N 无文件视为空文件（空文件怎么变成第二个文件）
+
+生成补丁文件
+#diff -Nua test1.sh test2.sh >test.patch
+使用patch打补丁(先yum安装patch)
+#patch -p0 < test.patch
+//-p数字表示补丁文件与源文件相差几级目录
+#patch -RE < test.patch	//还原旧版本，反向修复
+

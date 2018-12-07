@@ -1,0 +1,147 @@
+服务安全与监控
+加密与解密（确保数据的机密性）
+对称加密：加密/解密使用同一个密钥
+非对称加密：加密/解密使用不同的密钥（通过公私钥实现）
+*通过信息摘要保护信息的完整性
+信息摘要：基于输入的信息生成长度较短、位数固定的散列值
+
+常见的加密算法
+对称加密：
+DES（Data Encryption Standard）
+AES（Advanced Encryption Standard）
+非对称加密
+RSA（Rivest Shamirh Adleman）
+DSA（Digital Signature Algorithm）
+
+Hash散列技术（用于摘要信息）
+MD5（Message Digest Algorithm 5）
+SHA（Secure Hash Algorithm）
+
+MD5完整性检验（使用md5sum校验工具）
+#md5sum 文件	
+//可以查看MD5校验值，与软件官方提供的校验值对比
+
+GPG加/解密工具
+GnuPG(最流行的数据加密、数字签名工具软件)
+#gpg --version  //查看版本信息
+
+对称加/解密基本用法
+#gpg -c test.txt   //加密操作
+#file test.txt*	//查看加密后的文件
+#gpg -d test.txt.gpg >  ntest.txt	//解密操作
+
+非对称加/解密
+1.A用户创建密钥对
+#gpg --gen-key	//进入交互设置密钥对名称等信息
+*密钥的生成需要生成大量的随机字节，可以通过琐碎操作使随机数字发生器有更好的机会获得足够的熵数
+若生成时间太长，可以使用以下命令加快生成速度
+#dd if=/dev/zero of=/a.txt bs=1M count=10240
+
+2.A用户导出公钥
+#gpg --list-keys	//查看
+#gpg -a --export 密钥对名称 > /tmp/key.pub
+
+3.B用户导入公钥
+#gpg --import /tmp/key.pub
+
+4.B用户使用公钥加密
+#gpg -e -r 密钥对名称 test.txt
+#mv test.txt.gpg /tmp/	//移动到公用目录下，使其他用户能访问
+
+5.A用户再使用私钥解密
+#gpg -d /tmp/test.txt.gpg > ntest.txt	
+
+*注意，公钥只能用于加密，不能用于解密，即A用户加密B用户无法解密！
+
+GPG软件签名与验证
+发送方使用私钥签名
+#gpg -b 文件名	
+//为软件包建立签名文件 -b 分离式签名,生成一个.sig后缀的文件
+接收方使用公钥验证签名
+#gpg --import 公钥路径	//导入官方公钥
+#gpg --verify 文件名.sig 文件名	//验证文件完整性
+
+AIDE入侵检测系统
+安装软件包
+#yum -y install aide
+查看修改配置文件
+#vim /etc/aide.conf
+@@define DBDIR /var/lib/aide	//数据库目录
+@@define LOGDIR /var/log/aide	//日志目录
+database=file:@@{DBDIR}/aide.db.gz	//读取文件名
+database_out=file:@@{DBDIR}/aide.db.new.gz	//数据库文件名
+//一下内容为可以检查的项目（权限，用户，组，大小，哈希值等）
+#p:      permissions
+FIPSR = p+i+n+u+g+s+m+c+acl+selinux+xattrs+sha256  //定义检查项集合的别名
+...
+//以下选项为对哪些目录进行哪些检查项目
+/bin FIPSR
+!/sbin 	//使用!表示不校验该目录
+
+初始化数据库
+#aide --init  //生成校验数据库，数据保存在/var/lib/aide/aide.db.new.gz
+#cp /var/lib/aide/aide.db.new.gz /root //备份数据库，防止被入侵后删除或修改
+
+入侵后检测
+#cd /var/lib/aide/
+#mv aide.db.new.gz aide.db.gz	//配置文件读取的文件名为aide.db.gz
+#aide --check	//检查数据发现了哪些变化
+
+
+扫描与抓包（安全分析概述）
+1、检测潜在风险
+2、查找可攻击目标
+3、收集设备/主机/系统/软件信息
+4、发现可利用的安全漏洞
+
+典型的扫描方式
+scan 主动探测
+sniff 被动监听/嗅探
+capture 数据包捕获（抓包）
+
+常见的安全分析工具
+扫描器：nmap	协议分析：tcpdump Wireshark
+
+NMAP简介
+强大的网络探测利器工具，支持多种探测技术（ping扫描、多端口扫描、TCP/IP指纹校验）
+
+基本用法
+#nmap [扫描类型] [选项] <扫描目标..>
+常用的扫描类型
+-sS TCP SYN扫描（半开）
+-sT TCP 连接扫描（全开）
+-sU UDP扫描
+-sP ICMP扫描
+-A  目标系统全面分析(复合选项相当于-O -sV -sC traceroute跟踪等...)
+-n  不执行DNS解析
+-p  指定端口，可以是一个范围,或用逗号分隔
+例：
+#nmap -n -sP 192.168.1.0/24 //检查一个网段有哪些主机能ping通
+#nmap -p 21-25，80，443 192.168.4.60-61,254	
+//检查60、61、254主机的21到25，80，443端口是否开启了服务
+
+网络抓包工具
+tcpdump抓包命令行工具
+#tcpdump [选项] [过滤条件]
+常见监控选项
+-i 指定监控的网络接口
+-A 转换为ACSII码 以方便阅读
+-w 将数据包信息保存到指定文件（保存的文件需要使用tcpdump -r读取）
+-r 从指定文件读取数据包信息
+-c 指定抓包数量
+
+过滤条件
+类型：host、 net、 port、 portrange
+方向：src（源地址）、 dst（目标地址）
+协议：tcp、 udp、 ip、 wlan、 arp、...
+多个条件组合：and、 or、 not
+
+
+
+
+
+
+
+
+
+ 

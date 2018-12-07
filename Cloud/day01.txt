@@ -1,0 +1,176 @@
+KVM简介
+搭建KVM服务器
+
+KVM/QEMU/LIBVIRTD
+1 KVM是linux内核的模块，需要CPU支持，采用硬件辅助虚拟化技术Intel-VT，AMD-V，内存的相关如Intel的EPT和AMD的RVI技术
+2 QEMU是一个虚拟化仿真工具，通过ioctl与内核vkm交互完成对硬件的虚拟化支持
+3 Libvirt是一个对虚拟化管理的接口和工具，提供用户端程序virsh，virt-install，virt-manager，virt-view与用户交互
+
+安装虚拟化服务器平台必备软件
+1 qemu-kvm 为kvm提供底层仿真支持
+2 libvirt-daemon 是libvirtd守护进程，管理虚拟机
+3 libvirt-client 用户端软件，提供客户端管理命令
+4 libvirt-daemon-driver-qemu libvirtd连接qemu的驱动
+
+可选功能
+1 virt-install	系统安装工具
+2 virt-manager	图形管理工具
+3 virt-v2v		虚拟机迁移工具
+4 virt-p2v		物理机迁移工具
+#yum -y install qemu-kvm libvirt-daemon \
+ >libvirt-client libvirt-daemon-driver-qemu
+#systemctl start libvirtd
+
+虚拟机的组成
+内核虚拟化模块（KVM）
+系统设备仿真（QEMU）
+虚拟机管理程序（LIBVIRT）
+虚拟机配置声明文件（一个XML文件,位置/etc/libvirt/qemu）
+虚拟机的硬盘(一个磁盘镜像文件，位置/var/lib/libvirt/images)
+
+
+管理KVM平台
+virsh命令工具（提供管理各虚拟机的命令接口）
+#virsh	//支持交互模式，支持tab补全命令
+#virsh 控制指令 [虚拟机名称] [参数]	//格式
+
+#virsh nodeinfo	//查看kvm节点服务器（物理真机）信息
+#virsh list [--all]		//列出虚拟机
+#virsh net-list [--all]		//列出虚拟网络
+#virsh dominfo 虚拟机名称		//查看指定虚拟机的信息
+#virsh start|reboot|shutdown 虚拟机名称	//运行|重启|关闭指定虚拟机
+#virsh destroy 虚拟机名称		//强制关闭指定虚拟机
+#virsh autostart 虚拟机名称	//设置开机自动运行
+
+#LANG=zh_CN.UTF-8		//*转换中文查看命令帮助
+
+qemu-img命令
+格式：qemu-img 命令 参数 块文件名称 大小
+常用命令有
+create 创建一个磁盘
+convert 转换磁盘格式
+info 查看磁盘信息
+snapshot 管理磁盘快照
+
+创建新的镜像盘文件
+#qemu-img create -f 格式 磁盘文件 大小
+#qemu-img create -f qcow2 idsk.img 50G
+
+查询镜像盘文件的信息
+#qemu-img info 磁盘路径
+#qemu-img info disk.img
+
+使用-b选项指定后端模板文件
+#qemu-img create -b 模板文件 -f 格式 名称 大小
+
+Virsh管理
+连接本地/远程KVM
+连接本地
+#virsh -c qemu:///system		//等同于#virsh
+连接远程
+#virsh -c qemu+ssh://user@ip/system
+等同于virsh进入交互模式后执行以下命令
+virsh#connect qemu+ssh://user@ip/system
+
+*virsh start --console 虚拟机名称
+
+创建虚拟交换机
+创建配置文件/etc/libvirt/qemu/networs/*.xml
+<network>
+<name>vbr</name>
+<bridge name="vbr"/>
+<forward mode="nat"/>
+<ip address="192.168.1.254" netmask="255.255.255.0">
+<dhcp>
+<range start="192.168.1.1" end="192.168.1.100"/>
+</dhcp>
+</ip>
+</network>
+
+XML管理
+xml配置文件默认位于/etc/libvirt/qemu/目录下
+
+修改文件后定义添加虚拟交换机
+virsh#net-define *.xml
+virsh#net-start vbr
+
+修改已定义的配置文件使用net-edit命令
+virsh#net-edit vbr
+
+查看及导出xml配置文件
+#virsh dumpxml 虚拟机名
+#virsh dumpxml 虚拟机名 > 虚拟机名.xml
+
+修改新的xml文件后定义新虚拟机
+#virsh define XML文件
+#virsh list -all
+
+
+自定义虚拟机安装
+一、准备网络yum源
+
+二、创建磁盘文件
+#cd /var/lib/libvirt/images/
+#qemu-img create -f qcow2 node.qcow2 2G
+
+三、安装系统
+配置yum源，安装常用软件，删除firewalld和NetworkManager
+修改网卡配置文件，使用dhcp自动分配ip地址
+*tab自动补全命令软件包为bash-completion
+
+禁用空路由
+#vim /etc/sysconfig/network
+NOZEROCONF="yes"
+#systemctl restart network
+
+开启虚拟机console接口（替换配置文件）
+#cp grub /etc/defaults/grub
+#grub2-mkconfig -o /boot/grub2/grub.cfg	//重启配置文件
+#reboot
+
+修改grub文件禁用UUID(克隆机器时UUID不能相同，因此需要禁用)
+#vim /etc/default/grub
+添加两行
+GRUB_DISABLE_LINUX_UUID="true"
+GRUB_ENABLE_LINUX_LABEL="true"
+
+安装扩展分区软件
+#yum -y install cloud-utils-growpart
+
+清理日志信息
+关闭虚拟机，在真机执行virt-sysprep -d 虚拟机名称
+
+开始自定义虚拟机
+#cd /var/lib/libvirt/images/
+#qemu-img create -b 后端文件 -f qcow2 文件名 大小
+#cd nsd1807		//git目录
+#cp node.xml /etc/libvirt/qemu/node1.xml
+#vim /etc/libvirt/qemu/node1.xml	//修改内容作为新虚拟机的xml配置文件
+#virsh define /etc/libvirt/qemu/node1.xml
+#virsh start node1	//测试
+#virsh console node1
+
+新建的虚拟机进行磁盘扩容
+#/usr/bin/growpart /dev/vda 1
+#/usr/sbin/xfs_growfs /
+*若出现unexpected output in sfdisk类型的报错，属于编码问题
+执行：#LANG=en_US.UTF-8 就可以了
+
+保护后端文件，删除虚拟机，隐藏文件
+#virsh shutdown 后端虚拟机
+#virsh undefine 后端虚拟机
+
+*ps -ewff
+
+虚拟设备管理
+
+
+离线访问虚拟机
+使用guestmount工具（严禁用于修改后端文件）
+注意：若使用guestmount修改后端文件，则此后端文件对应的所有前端文件都会失效！
+#guestmount -a 虚拟机磁盘路径 -i /挂载点
+//修改后注意umount
+
+
+
+

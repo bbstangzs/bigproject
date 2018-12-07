@@ -1,0 +1,6 @@
+openstack图形界面操作
+通过Horizon管理用户（管理员admin身份操作）
+创建项目-->创建管理用户并指定项目
+#source ~/keystonerc_admin
+#openstack user create --password 密码 用户名
+#open

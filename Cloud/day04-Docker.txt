@@ -1,0 +1,192 @@
+容器技术
+容器技术已经成为应用程序封装和交付的核心技术
+容器技术的核心（由几个内核技术组成）
+1、Cgroups（Control Groups）资源管理
+2、NameSpace 进程隔离
+3、SElinux安全
+
+Docker是完整的一套容器管理系统
+Docker提供了一组命令，使用户更加方便直接地使用容器技术
+优点：
+1、比传统虚拟化技术更加简洁高效
+2、使用共享公共库和程序
+缺点：
+1、隔离性没有虚拟化强
+2、共用linux内核，安全性有先天缺陷
+3、SElinux难以驾驭
+4、监控容器和容器排错是挑战
+
+部署Docker
+Docker安装要求
+需要64位操作系统
+RHEL6.5以上的版本
+关闭防火墙（非必须）
+
+真机准备RPM包，配置docker的yum源
+#mkdir /var/ftp/docker
+#cp docker-engine* /var/ftp/docker/
+#createrepo /var/ftp/docker
+
+虚拟机配置yum客户端，yum安装docker
+#yum -y install docker-engine	
+#systemctl start docker	
+#ifconfig	//出现docker0虚拟交换机表示环境部署完成
+#docker version	//查看版本
+
+Docker中容器是基于镜像启动的
+镜像是启动容器的核心
+镜像采用分层设计
+使用快照的cow技术，确保底层数据不丢失
+
+Docker官方提供公共镜像仓库
+http://hub.docker.com
+
+基本命令
+#docker images	//查看镜像
+#docker search	//搜索/查找
+#docker pull	//下载
+#docker push	//上传
+
+#docker save 镜像 > 文件名.tar 	//备份，使用tar打包的方式备份
+#file 文件名.tar			//可以查看得到文件格式为tar
+#docker load < 文件名.tar		//恢复
+
+*补充知识
+1、curl可以下载文件（使用-O(大写)）
+2、注意善于利用命令行批量执行命令
+3、redhat与debian的主要区别：
+   redhat装包时使用的工具yum和rpm
+   debian装包时使用的工具apt-get和dpkg (debian的软件包为.bed后缀)
+4、额外知识
+	redhat的主要版本rhel centos sllinux fedora
+	debian的主要版本 debian ubuntu
+5、docker的参数可以使用传参方式，如 docker rm $(docker ps -qa)
+
+启动镜像生成一个容器
+#docker run -it 镜像名：标签名 运行的命令
+//标签名和运行命令可省略，省略时按默认方式运行
+
+镜像其他相关命令
+docker history 镜像名	//查看镜像制作历史
+docker inspect 镜像名	//查看镜像底层信息
+docker rmi 镜像名		//删除镜像（需要先删除此镜像生成的容器）
+docker tag 镜像名：标签名 新镜像名：新标签名	//修改镜像名称和标签（复制，不会删除旧镜像）
+
+容器命令
+docker ps		//查看容器列表
+docker stop		//关闭容器
+docker start 	//启动容器
+docker restart	//重启容器
+docker attach	//进入容器（exit退出后容器关闭）
+docker exec		//进入容器（exit推出后容器不关闭）
+docker inspect 容器名	//查看容器底层信息
+docker top 容器名		//查看容器进程列表
+docker rm 容器名		//删除容器（需要先关闭容器）
+
+
+
+自定义镜像（使用docker commit生成适合自己生产环境的镜像）
+使用镜像启动容器，在该容器上进行修改
+改造成适合自己使用的容器环境，另存为一个新的镜像模板以便以后使用
+#docker commit 容器id 新镜像名：标签名
+//修改后生成新的镜像
+
+
+制作自定义镜像（Dockerfile）
+
+Dockerfile语法格式
+FROM 基础镜像
+MAINTAINER 镜像创建者信息
+EXPOSE 开放的端口
+ENV 设置变量
+ADD 复制文件到镜像
+RUN 制作镜像时执行的命令，可以多个
+WORKDIR 定义容器默认工作目录
+CMD 容器启动时执行的命令 仅能有一条CMD
+//CMD使用数组的格式填写命令及参数如： ["命令","选项1","选项2"]
+*补充知识：CMD可以执行一个自编的脚本，脚本同时启动多项服务（注意赋予脚本执行权限）
+
+#mkdir docker && cd docker
+#vim Dockerfile	//文将名必须为Dockerfile（严格区分大小写）
+FROM 基础镜像
+RUN rm -rf /etc/yum.repos.d/*.repo	//容器内执行的命令，可以有多个
+ADD 源文件 目标文件	//源文件必须与Dockerfile在同个文件夹下
+RUN yum -y install httpd
+
+#docker build -t 新镜像名 Dockerfile所在的目录
+
+自定义镜像仓库
+#docker pull registry
+#vim /etc/docker/daemon.json
+{
+	"insecure-registries":["物理机ip：5000“]
+}
+#systemctl restart docker
+#docker run -d -p 5000:5000 registry
+#docker tag 镜像：标签 ip:5000/镜像：标签
+#docker push ip:5000/镜像：标签
+
+创建私有镜像仓库后进行访问
+查看镜像名称
+http://ip:5000/v2/_catalog
+查看标签名称
+http://ip:5000/v2/镜像名/tags/list
+#scp 仓库ip:/etc/docker/daemon.json /etc/docker/		
+//docker主机拷贝仓库配置文件
+
+进入registry容器查看/etc/docker/registry/config.yml
+#docker exec -it registry容器id sh
+/# cat /etc/docker/registry/config.yml
+
+持久化存储
+docker容器不保持任何数据
+重要数据需要使用外部卷存储（数据持久化）
+容器可以挂载真实机目录或共享存储为卷
+
+主机卷的影射（将真实机目录挂载到容器中提供持久化存储）
+#docker run -v 真实机目录路径：容器挂载路径 -it 镜像名 执行命令
+//容器挂载路径最好使用不存在的路径，避免被容器内文件被覆盖
+
+
+Docker网络架构
+创建虚拟网卡
+#cd /etc/sysconfig/network-scripts
+#cp ifcfg-eth0{,:0}
+#vim ifcfg-eth0:0	//修改对应内容
+
+创建虚拟网桥
+#vim /etc/sysconfig/network-scripts/ifcfg-br0
+TYPE="Bridge"	//关键项,需要相关软件包bridge-utils
+#yum -y install bridge-utils
+#systemctl restart network
+
+Docker网络拓扑
+#docker network list	//查看Docker创建的网络模型
+#docker network create --driver bridge 网桥名称	//新建Docker网络模型
+#docker network inspect 网桥名称
+
+#docker network create --subnet=172.30.0.0/16 网桥名称
+//自定义网段
+
+启动容器时使用自定义创建的网桥
+#docker run --network=网桥名称 -id 镜像名称
+
+端口映射(使用端口映射可以实现外部网络访问容器内的资源)
+#docker run -p 真实机端口：容器端口 -id 镜像名称
+例：
+#docker run -p 8080:80 -id nginx
+//映射真实机的8080端口到容器中的80端口
+
+
+
+
+
+
+
+
+
+
+
+
+
+

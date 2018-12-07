@@ -1,0 +1,225 @@
+云计算简介
+基于互联网相关服务的增加、使用和交付模式
+提供可用的、便捷的、按需的网络访问，进入可配置的计算资源共享池
+
+IaaS(Infrastructure as a Service),基础设施即服务
+提供给消费者的服务时对所有计算基础设施的利用
+IaaS分为三种用法：公有云、私有云和混合云
+Openstack属于IaaS的一种
+
+PaaS(Platform as a Service),平台即服务
+以服务器平台或者开发环境作为服务进行提供
+不仅仅时单纯的基础平台，还针对该平台的技术支持服务，针对该平台而进行的应用系统开发、优化等服务
+PaaS平台是指云环境中的应用基础设施服务，也可以说是中间件即服务
+
+SaaS(Software as a Service)，软件即服务
+通过Internet提供软件的模式
+AppStore和安卓市场都属于SaaS的一种
+
+OpenStack简介
+OpenStack是一套IaaS解决方案，一个开源的云计算管理平台
+
+Openstack的7大主要核心组件
+Horizon
+	用于管理Openstack各种服务的、基于web的管理接口
+	通过图形界面实现创建用户、管理网络、启动实例等操作
+Keystone
+	为其他服务提供认证和授权的集中身份管理服务
+	提供了集中的目录服务
+	支持多种身份认证模式（密码认证、令牌认证、AWS亚马逊Web服务登陆）
+	为用户和其他服务提供了SSO认证服务
+Neutron
+	一种软件定义网络服务
+	用户创建网络、子网、路由器、管理浮动IP地址
+	可以实现虚拟交换机、虚拟路由器
+	可用于在项目中创建VPN
+Cinder
+	为虚拟机管理存储卷的服务
+	为运行在Nova中的实例提供永久的块存储
+	可以通过快照进行数据备份
+	经常应用在实例存储环境中
+Nova
+	在节点上用于管理虚拟机的服务
+	Nova是一个分布式的服务
+	所有节点都需要安装Nova
+Glance
+	扮演虚拟机镜像注册的角色
+Swift
+	对象存储
+
+部署安装环境，准备工作(在真机搭建DNS和时间同步服务器)
+配置yum仓库（12个yum源，10731个包）
+
+
+搭建dns(DNS服务器不能与openstack安装在同一台主机上)
+#yum -y install bind bind-chroot
+#vim /etc/named.conf
+options {
+        listen-on port 53 { 10.255.255.254; };
+        // listen-on-v6 port 53 { ::1; };
+        allow-query     { any; };
+	  ...
+        recursion yes;
+        forwarders { 114.114.114.114; };
+        dnssec-enable no;
+        dnssec-validation no;
+}
+#systemctl restart named
+#dig @10.255.255.254 www.baidu.com	//测试dns服务
+
+配置时间同步chrony
+#vim /etc/chrony.conf
+server ntp.aliyun.com iburst
+bindacqaddress 0.0.0.0	//所有ip都可以监听
+allow 0/0		//允许所有客户端进行同步
+#systemctl restart chronyd
+#chronyc sources -v	//测试上层服务器是否同步成功
+
+准备两台虚拟机（一台openstack，一台nova01）
+使用后端盘文件创建新虚拟机，两台虚拟机修改如下配置
+openstack主机要求
+内存：9.5G
+修改镜像文件
+系统盘：50G
+额外空磁盘：20G
+两张网卡：分别为lzq和private1网段
+
+#qemu-img create -b 后端模板 -f qcow2 openstack.img 50G
+#cp node.xml openstack.xml	//修改模板创建新的虚拟机配置文件
+#sed -i 's/node/openstack/' node.xml
+#virsh define openstack.xml
+#qemu-img create -f qcow2 disk.img 20G
+#virsh edit openstack
+  <memory unit='KiB'>9961472</memory>
+  <currentMemory unit='KiB'>9961472</currentMemory>
+...
+	<--添加以下内容--->
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/libvirt/images/disk.img'/>
+      <target dev='vdb' bus='virtio'/>
+    </disk>
+    <interface type='network'>
+      <source network='private1'/>
+      <model type='virtio'/>
+    </interface>
+#virsh start openstack
+
+进入openstack虚拟机，配置两张网卡的静态ip（只允许指定一个网关），配置/etc/hosts添加openstack和nova01的域名解析，配置yum源，3个光盘一共12个yum源，一共有10731个包
+禁用selinux
+#vim /etc/selinux/config
+setenforce=disabled
+卸载firewalld
+#systemctl stop firewalld
+#yum remove firewalld-* python-firewalld
+卸载NetworkManager
+#systemctl stop NetworkManager
+#yum remove NetworkManager*
+#systemctl start network
+
+nova01主机要求
+内存：5G
+系统盘：50G
+两张网卡：分别为lzq和private1网段
+
+安装openstack
+
+1.创建卷组
+#yum -y install lvm2
+#vgcreate cinder-volumes /dev/vdb	//卷组名称必须为cinder-volumes
+
+2.安装openstack依赖包(分别在openstack主机和nova主机上安装)
+#yum -y install qemu-kvm libvirt-client libvirt-daemon \
+>libvirt-daemon-driver-qemu python-setuptools	//5个软件包
+*配置的yum源中，除了Centos7的基础包需要验证签名(gpgcheck=1)，其他yum源不需要导入签名认证
+
+安装前逐项检查
+禁用selinux
+卸载firewalld和NetworkManager
+配置主机网络参数（静态IP）
+配置主机yum源（12个）
+cinder-volumes卷组是否创建
+公钥是否导入
+相关软件包是否安装
+NTP和DNS服务器是否可用
+
+
+安装packstack
+#yum -y install openstack-packstack
+#packstack --gen-answer-file answer.ini	//生成应答文件
+#vim answer.ini	//修改应答文件
+11：CONFIG_DEFAULT_PASSWORD=redhat  //此密码只有在生成随机密码失败时才生效，一般没用
+42：CONFIG_SWIFT_INSTALL=n		
+75：CONFIG_NTP_SERVERS=10.255.255.254   //时间服务器的地址，指向自己搭建的服务器地址
+554：CONFIG_CINDER_VOLUMES_CREATE=n    //创建卷,已经手动创建过了
+840：CONFIG_NEUTRON_ML2_TYPE_DRIVERS=flat,vxlan   
+	//驱动类型，flat提供外网访问功能，vxlan提供私网隔离功能
+876：CONFIG_NEUTRON_ML2_VXLAN_GROUP=239.1.1.5  
+	//设置组播地址,最后一个随意不能为0和255,其他固定
+910：CONFIG_NEUTRON_OVS_BRIDGE_MAPPINGS=physnet1:lzq  
+	//定义一个物理网桥的名称
+921：CONFIG_NEUTRON_OVS_BRIDGE_IFACES=lzq:eth0   
+	//lzq桥的名称与eth0连接，管理eth0,网桥与哪个物理网卡连接
+936：CONFIG_NEUTRON_OVS_TUNNEL_IF=eth1
+1179：CONFIG_PROVISION_DEMO=n   //DEMO是否测试
+
+#packstack --answer-file=answer.ini	//安装时间较长
+*几种可能出现错误
+1、ntp时间不同步（几率较低）
+2、网桥名称错误
+3、根分区空间不足
+4、yum源错误（系统源没有导入公钥或配置文件未验证签名）
+   //可以执行提供的命令检查错误原因
+
+网络管理
+#cat /etc/sysconfig/network-scripts/ifcfg-lzq	//查看外部OVS网桥
+查看lzq网桥配置（lzq为OVS网桥设备）
+#cat /etc/sysconfig/network-scripts/ifcfg-eth0	
+//查看eth0网卡配置（该网卡为OVS网桥的接口）
+#ovs-vsctl show	//验证OVS配置
+#ip -o addr show
+
+Horizon BUG 处理
+*软件安装后默认无法打开Horizon，需要修改配置文件
+#vim /etc/httpd/conf.d/15-horizon_vhost.conf
+WSGIProcessGroup apache
+WSGIApplicationGroup %{GLOBAL}	//添加此行
+#apachectl graceful	//重新载入配置文件
+
+浏览器访问openstack
+账户密码查看root家目录下的keystonerc_admin
+#cat keystonerc_admin	//生成的文件，里面有用户名和随机密码
+
+
+命令行初始化环境变量
+#source ~/keystonerc_admin
+	//注意，若在图形界面中修改了密码，需要对应修改该文件下的密码，否则无法认证
+初始化认证后，命令提示符会改变，如
+[root@openstack ~(keystone_admin)]# 
+
+查看帮助信息
+#openstack help
+
+创建项目
+#openstack project create myproject		//创建名为myproject的项目
+#openstack project list				//查看项目信息
+#nova quota-update --cores 30 myproject	//更新vcpu配额为30
+#openstack project delete myproject		//删除myproject项目
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

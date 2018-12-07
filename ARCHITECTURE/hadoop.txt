@@ -1,0 +1,362 @@
+Hadoop大数据
+安装hadoop
+先安装依赖包java-1.8.0-openjdk和java-1.8.0-openjdk-devel
+#yum -y install java-1.8.0-openjdk-devel	//java-1.8.0-openjdk会被自动依赖安装
+#java -version	//查看版本
+#jps			//查看进程
+
+#tar -zxvf hadoop-2.7.6.tar.gz
+#mv hadoop-2.7.6 /usr/local/hadoop
+#/usr/local/hadoop/bin/hadoop version	//会报错,需要指定javahome的路径
+#rpm -ql java-1.8.0-openjdk		//查看javahome的路径
+#vim /usr/local/hadoop/etc/hadoop/hadoop-env.sh
+export JAVA_HOME="/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.131-11.b12.el7.x86_64/jre/"
+export HADOOP_CONF_DIR="/usr/local/hadoop/etc/hadoop"
+//指定javahome路径和hadoop配置目录路径
+#/usr/local/hadoop/bin/hadoop version	//再次执行查看hadoop版本
+
+测试hadoop功能
+#./hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.6.jar
+//查看案例jar包的功能
+#./hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.6.jar \
+>wordcount 输入文件/目录 输出目录
+//统计单词出现次数
+
+需要修改的主要配置文件
+#ls /usr/local/hadoop/etc/hadoop
+hdfs-site.xml			//HDFS配置文件
+core-site.xml			//核心配置文件
+yarn-site.xml
+hadoop-env.sh			//环境配置文件
+mapred-site.xml.template
+slaves				//节点配置文件
+
+其中xml文件配置格式为
+<property>
+	<name>关键字</name>
+	<value>变量值</value>
+	<description>描述</description>
+</property>
+
+HDFS分布式文件系统
+完全分布式实验
+系统规划
+hadoop01	192.168.1.51
+datanode1	192.168.1.61
+datanode2	192.168.1.62
+datanode3	192.168.1.63
+
+三台datanode基础环境要求
+1. 禁用selinux
+2. 禁用firewalld
+3. 安装java-1.8.0-openjdk-devel
+4. 配置/etc/hosts 使所有主机都能ping通namenode主机,namenode主机也能ping通所有节点
+
+Namenode主机配置要求
+#vim /etc/ssh/ssh_config
+Host *
+        StrictHostKeyChecking no	//加入本选项禁用初次访问确认
+
+#ssh-keygen -t rsa -b 2048 -N '' -f /root/.ssh/id_rsa
+#for i in datanode{1..3};do
+>ssh-copy-id -i /root/.ssh/id_rsa.pub ${i}
+>done
+#ssh-copy-id -i /root/.ssh/id_rsa.pub hadoop01
+//配置namenode免密登陆所有主机(包括自己)
+
+配置namenode主机配置文件
+注意善于查看apache官方描述文件https://hadoop.apache.org/docs
+#vim /usr/local/hadoop/etc/hadoop/core-site.xml	//添加核心选项,其他选项按实际需要添加
+<configuration>
+<property>
+        <name>fs.defaultFS</name>
+        <value>hdfs://hadoop01:9000</value>
+</property>
+<property>
+        <name>hadoop.tmp.dir</name>
+        <value>/var/hadoop</value>		//hadoop的数据目录
+</property>
+</configuration>
+
+#vim /usr/local/hadoop/etc/hadoop/hdfs-site.xml
+<configuration>
+<property>
+        <name>dfs.namenode.http-address</name>
+        <value>hadoop01:50070</value>
+</property>
+<property>
+        <name>dfs.namenode.secondary.http-address</name>
+        <value>hadoop01:50090</value>
+</property>
+<property>
+        <name>dfs.replication</name>		//指定储存数量
+        <value>2</value>
+</property>
+</configuration>
+
+#vim /usr/local/hadoop/etc/hadoop/slaves
+datanode1
+datanode2
+datanode3
+
+将namenode主机的/usr/local/hadoop/目录拷贝到所有datanode主机下,并在所有主机上创建/var/hadoop目录
+格式化namenode主机
+#/usr/local/hadoop/bin/hdfs namenode -format
+
+启动集群(namenode主机上操作)
+#/usr/local/hadoop/sbin/start-dfs.sh
+
+验证角色(所有主机上分别查看)
+#jps
+
+验证集群(namenode主机上操作)
+#/usr/local/hadoop/bin/hdfs dfsadmin -report
+
+
+完全分布式mapred部署
+#cd /usr/local/hadoop/etc/hadoop/
+#mv mapred-site.xml.template mapred-site.xml
+#vim mapred-site.xml
+<configuration>
+        <property>
+                <name>mapreduce.framework.name</name>
+                <value>yarn</value>
+        </property>
+</configuration>
+
+#vim yarn-site.xml
+<configuration>
+<property>
+        <name>yarn.resourcemanager.hostname</name>
+        <value>hadoop</value>
+</property>
+<property>
+        <name>yarn.nodemanager.aux-services</name>
+        <value>mapreduce_shuffle</value>
+        </property>
+</configuration>
+
+#/usr/local/hadoop/sbin/start-yarn.sh	//启动ResourceManager
+#jps							//验证角色查看
+#/usr/local/hadoop/bin/yarn node -list	//查看node节点状态
+
+客户端浏览器访问页面
+http://hadoop:50070	#namenode
+http://hadoop:50090	#secondarynamenode
+http://hadoop:8088	#resoucemanager
+http://node1:50075	#datanode
+http://node1:8042		#nodemanager
+
+
+HDFS基本命令使用
+#/usr/local/hadoop/bin/hadoop fs -shell命令 [ hdfs://hadoop:9000/ ]
+*注意,hdfs://hadoop:9000/ 可以省略为/,
+因为在core-site.xml文件中指定了fs.defaultFS的值为hdfs://hadoop:9000/
+
+#/usr/local/hadoop/bin/hadoop fs -touchz /test.txt	//创建文件test.txt
+#/usr/local/hadoop/bin/hadoop fs -mkdir /abc		//创建目录abc
+
+#/usr/local/hadoop/bin/hadoop fs -put *.txt /abc		
+//将本地的txt文件上传到文件系统的abc目录下
+#/usr/local/hadoop/bin/hadoop fs -get /abc/*.txt
+//下载文件系统abc目录中的txt文件到当前目录下
+
+# /usr/local/hadoop/bin/hadoop jar share/hadoop/mapreduce/hadoop-mapreduce-examples-2.7.6.jar wordcount hdfs://hadoop:9000/abc hdfs://hadoop:9000/output
+
+
+HDFS增加节点
+1 准备新的节点,禁用SELinux,禁用firewall
+2 设置ssh免密登陆
+3 修改所有节点/etc/hosts,添加新节点的主机解析
+4 安装java运行环境(java-1.8.0-openjdk-devel)
+5 拷贝Namenode的hadoop软件目录到新节点
+6 修改Namenode的slaves文件添加新节点
+7 在新节点启动Datanode
+#/usr/local/hadoop/sbin/hadoop-daemon.sh start datanode
+8 设置同步带宽,同步数据,实现数据平衡
+#/usr/local/hadoop/bin/hdfs dfsadmin -setBalancerBandwidth 60000000
+#/usr/local/hadoop/sbin/start-balancer.sh
+9 查看集群状态验证
+#/usr/local/hadoop/bin/hdfs dfsadmin -report
+
+
+删除节点
+配置NameNode的hdfs-site.xml文件
+#vim /usr/local/hadoop/etc/hadoop/hdfs-site.xml
+<property>
+	<name>dfs.hosts.exclude</name>
+	<value>/usr/local/hadoop/etc/hadoop/exclude</value>
+</property>
+//添加配置内容,写入需要删除的主机名
+#vim /usr/local/hadoop/etc/hadoop/exclude
+node4
+#/usr/local/hadoop/bin/hdfs dfsadmin -refreshNodes
+#/usr/local/hadoop/bin/hdfs dfsadmin -report	//查看集群状态
+
+Decommission Status : Decommission in progress	//表示数据正在迁移
+Decommission Status : Decommission
+//表示数据已经迁移完成,只有该状态才可以down机下线
+
+yarn节点管理
+#/usr/local/hadoop/sbin/yarn-daemon.sh start nodemanager	//增加节点
+#/usr/local/hadoop/sbin/yarn-daemon.sh stop nodemanager		//删除节点,删除节点需要点时间
+#/usr/local/hadoop/bin/yarn node -list				//查看节点
+
+
+NFS网关(NFSGW)配置
+1 NFS网关需要所有节点的域名解析,先配置修改/etc/hosts
+2 配置代理用户,在Namenode和NFSGW上添加代理用户(代理用户的UID,GID,用户名必须完全一致)
+3 配置NFS主机授权(namenode上操作)
+#/usr/local/hadoop/sbin/stop-all.sh		//namenode上停止集群
+#vim /usr/local/hadoop/etc/hadoop/core-site.xml		//添加配置
+<property>
+	<name>hadoop.proxyuser.nfsuser.groups</name>
+	<value>*</value>
+</property>
+<property>
+	<name>hadoop.proxyuser.nfsuser.hosts</name>
+	<value>*</value>
+</property>
+
+#for i in node{1..3};do			//同步配置文件到所有datanode节点
+>rsync -aSH --delete /usr/local/hadoop/etc/hadoop/core-site.xml \
+>${i}:/usr/local/hadoop/etc/hadoop/
+>done
+
+#/usr/local/hadoop/sbin/start-dfs.sh		//启动集群
+
+4 卸载rpcbind和nfs-utils(若有安装,因为端口会冲突)
+
+5 在nfsgw上修改hdfs-site.xml配置文件
+#vim /usr/local/hadoop/etc/hadoop/hdfs-site.xml
+<property>
+	<name>nfs.exports.allowed.hosts</name>
+	<value>* rw</value>
+</property>
+<property>
+	<name>nfs.dump.dir</name>
+	<value>/var/nfstmp</value>
+</property>
+
+6 创建目录并更改权限,授权给代理用户nfsuser
+#mkdir /var/nfstmp
+#chown nfsuser:nfsuser /var/nfstmp
+#setfacl -m user:nfsuser:rwx /usr/local/hadoop/logs/
+
+7 启动服务
+#cd /usr/local/hadoop/
+#./sbin/hadoop-daemon.sh --script ./bin/hdfs start portmap
+//启动portmap必须使用root用户,而且必须先启动portmap以后再启动nfs3
+//如果portmap重启了,重启之后nfs3也需要重启
+
+#su - nfsuser
+$cd /usr/local/hadoop
+$./sbin/hadoop-daemon.sh --script ./bin/hdfs start nfs3
+//启动nfs3必须使用core-site内设置的代理用户
+
+
+
+8 客户端挂载nfs服务(只支持版本3,只支持tcp,不支持NLM)
+#yum -y install nfs-utils
+#mount -t nfs -o vers=3,proto=tcp,noatime,nolock,sync \
+192.168.1.14:/  /mnt/
+各参数含义
+vers=3	//只支持v3版本
+proto=tcp	//只支持tcp协议
+nolock	//不支持NLM
+noatime	//禁用access time的时间更新
+sync		//强烈建议使用安装选项sync,可以最小化避免重排序写入造成不可预测的吞吐量,未指定同步选项可能会导致上传大文件时出现不可靠行为
+
+
+
+NFS共享的多种实现方式
+keepalived+rsync+inotify		//支持小型数据量
+DRBD+heartbeat			//支持中型数据量
+HDFS+NFSGW+keepalived				//支持大型数据量
+
+其中HDFS中,Nanmenode需要解决高可用问题,DataNode不需要担心高可用问题
+官方提供了两种解决方案
+HDFS WITH NFS
+HDFS WITH QJM
+
+
+
+Zookeeper
+Zookeeper是一个开源的分布式应用程序协调服务,用来保证数据载集群间的事物一致性
+应用场景
+1 集群分布式锁
+2 集群统一命名服务
+3 分布式协调服务
+
+安装Zookeeper(直接解压免安装)
+#tar -zxvf zookeeper-3.4.10.tar.gz
+#mv zookeeper-3.4.10 /usr/local/zookeeper
+#cd /usr/local/zookeeper/conf
+#mv zoo_sample.cfg zoo.cfg
+#vim zoo.cfg
+dataDir=/tmp/zookeeper			//需要创建的数据目录
+server.1=node1:2888:3888			//指定3台follower与1台observer
+server.2=node2:2888:3888
+server.3=node3:2888:3888
+server.4=hadoop:2888:3888:observer		//本机的server.id是4
+
+#mkdir /tmp/zookeeper
+#echo 4 > /tmp/zookeeper/myid		//告诉zookeeper本机的server.id
+
+#for i in node{1..3};do			//同步zookeeper安装目录到另外3台follower节点
+>rsync -aSH --delete /usr/local/zookeeper ${i}:/usr/local/
+>done
+#for i in {1..3};do			//在另外3台节点上创建数据目录并告知server.id
+>ssh node${i} "mkdir /tmp/zookeeper && echo $i > /tmp/zookeeper/myid"
+>done
+#/usr/local/zookeeper/bin/zkServer.sh start	//启动服务
+#jps		//查看角色状态
+884 QuorumPeerMain		
+#/usr/local/zookeeper/bin/zkServer.sh status	//查看服务状态
+Error contacting service. It is probably not running.
+//报错,原因是需要启动一半以上的follower节点才能投票选举出leader,服务才能开始运行
+
+#ssh node1 /usr/local/zookeeper/bin/zkServer.sh start
+#ssh node2 /usr/local/zookeeper/bin/zkServer.sh start
+#ssh node3 /usr/local/zookeeper/bin/zkServer.sh start	//启动后再次查看服务状态
+
+
+Kafka
+Kafka是一个分布式的消息系统,一种消息中间件
+用途:解耦 冗余 提高扩展性 缓冲 保持顺序,灵活,削峰填谷,异步通信
+
+安装Kafka(直接解压免安装)(只在node1,node2,node3上安装,observer不需要安装)
+#tar -zxvf kafka_2.10-0.10.2.1.tgz
+#mv kafka_2.10-0.10.2.1 /usr/local/kafka
+#vim /usr/local/kafka/config/server.properties	//修改两行
+broker.id=5		//每台服务器的broker.id都不能相同
+zookeeper.connect=node1:2181,node2:2181,node3:2181
+//指定zookeeper的连接地址,不用都列出,只需要写出一部分,写多台是防止连接的主机宕机
+
+#rsync -aSH --delete /usr/local/kafka node2:/usr/local/
+#rsync -aSH --delete /usr/local/kafka node3:/usr/local/ 	//同步安装包
+#/usr/local/kafka/bin/kafka-server-start.sh -daemon \		//启动服务,3台节点上都需要启动
+>/usr/local/kafka/config/server.properties
+
+
+
+NameNode的数据存放位置
+file://${hadoop.tmp.dir}/dfs/name
+
+DataNode的数据存放位置
+file://${hadoop.tmp.dir}/dfs/data
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
