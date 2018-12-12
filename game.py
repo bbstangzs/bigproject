@@ -1,3 +1,4 @@
+#!/usr/local/bin/python3
 import pickle,random,getpass,os,time,sys
 from datetime import datetime
 
